@@ -1,0 +1,177 @@
+# Sensitive Data & Credentials
+credentials.json
+**/credentials.json
+*.key
+*.pem
+*.p12
+*.pfx
+.env
+.env.*
+secrets.properties
+application-local.properties
+application-*.properties
+!application.properties
+!application-test.properties
+
+# Facebook Cookies & Auth
+cookies/
+**/cookies/
+facebook-cookies.json
+**/facebook-cookies.json
+
+# Output & Temporary Files
+output/
+**/output/
+temp/
+**/temp/
+screenshots/
+**/screenshots/
+*.log
+*.tmp
+*.temp
+
+# Build Artifacts - Java/Gradle
+build/
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+.gradletasknamecache
+bin/
+out/
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.war
+*.ear
+
+# Node.js & Frontend
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# IDE Files
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Chrome Debug Profile
+chrome-debug-profile/
+**/chrome-debug-profile/
+
+# Test Coverage
+coverage/
+*.lcov
+.nyc_output/
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Docker
+*.pid
+*.seed
+*.pid.lock
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# Next.js build output
+.next
+out
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+
+# Serverless directories
+.serverless/
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# Python (if any scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Backup files
+*.bak
+*.backup
+*~
+*.old
+
+# Archive files
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Keep these files
+!.gitignore
+!README.md
+!package.json
+!build.gradle
+!settings.gradle
+!gradlew
+!gradlew.bat

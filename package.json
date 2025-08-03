@@ -1,0 +1,27 @@
+{
+  "name": "tcg-tracker-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "npm run stop && concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "npm run stop:backend && cd backend && ./gradlew bootRun",
+    "dev:frontend": "npm run stop:frontend && cd frontend && npm run dev",
+    "stop": "npm run stop:backend && npm run stop:frontend",
+    "stop:backend": "taskkill /f /im java.exe 2>nul || echo No Java processes found",
+    "stop:frontend": "taskkill /f /im node.exe /fi \"WINDOWTITLE eq *next*\" 2>nul || taskkill /f /im node.exe /fi \"COMMANDLINE eq *next dev*\" 2>nul || echo No Next.js processes found",
+    "build": "npm run build:shared && npm run build:frontend && npm run build:backend",
+    "build:shared": "cd shared && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "build:backend": "cd backend && ./gradlew build",
+    "docker:up": "docker-compose up",
+    "docker:down": "docker-compose down",
+    "docker:build": "docker-compose build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

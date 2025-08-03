@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(npx create-next-app:*)",
+      "Bash(npm install)",
+      "Bash(gradle wrapper:*)",
+      "Bash(ls:*)",
+      "Bash(powershell:*)",
+      "Bash(\"C:\\Users\\Liam\\Downloads\\gradle-temp\\gradle-8.14.3\\bin\\gradle.bat\" wrapper)",
+      "Bash(C:/Users/Liam/Downloads/gradle-temp/gradle-8.14.3/bin/gradle.bat wrapper)",
+      "Bash(cmd /c \"C:\\Users\\Liam\\Downloads\\gradle-temp\\gradle-8.14.3\\bin\\gradle.bat wrapper\")",
+      "Bash(curl:*)",
+      "Bash(./gradlew.bat:*)",
+      "Bash(cmd /c gradlew.bat:*)",
+      "Bash(npm run dev:*)",
+      "Bash(./gradlew:*)",
+      "Bash(rm:*)",
+      "Bash(npm install:*)",
+      "Bash(.gradlew test --info)",
+      "Bash(npm run stop:*)",
+      "WebFetch(domain:localhost)",
+      "WebFetch(domain:localhost)",
+      "Bash(taskkill:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": []
+  },
+  "$schema": "https://json.schemastore.org/claude-code-settings.json"
+}

@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - LMSTUDIO_API_URL=http://host.docker.internal:1234
+      - GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials.json
+      - CHROME_USER_DATA_DIR=/chrome-data
+      - CHROME_DEBUGGER_PORT=9222
+    volumes:
+      - ./backend/credentials.json:/app/credentials.json:ro
+      - chrome-data:/chrome-data
+    networks:
+      - tcg-tracker-network
+    depends_on:
+      - chrome
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+    networks:
+      - tcg-tracker-network
+    depends_on:
+      - backend
+
+  chrome:
+    image: selenium/standalone-chrome:latest
+    ports:
+      - "4444:4444"
+      - "9222:9222"
+    environment:
+      - SE_NODE_MAX_SESSIONS=1
+      - SE_NODE_SESSION_TIMEOUT=86400
+    volumes:
+      - chrome-data:/home/seluser/.config/google-chrome
+    networks:
+      - tcg-tracker-network
+    shm_size: 2gb
+
+volumes:
+  chrome-data:
+
+networks:
+  tcg-tracker-network:
+    driver: bridge

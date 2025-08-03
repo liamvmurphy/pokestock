@@ -1,0 +1,7 @@
+# Copy this file to application-local.properties and fill in your values
+
+# Google Sheets Configuration
+google.sheets.spreadsheet.id=YOUR_SPREADSHEET_ID_HERE
+
+# You can override any other properties here for local development
+# logging.level.com.pokemon.tcgtracker=TRACE
