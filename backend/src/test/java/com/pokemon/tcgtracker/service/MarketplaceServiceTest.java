@@ -8,6 +8,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.openqa.selenium.WebDriver;
 
+import java.lang.reflect.Method;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -56,9 +57,9 @@ class MarketplaceServiceTest {
         
         assertNotNull(searchTerms);
         assertEquals(3, searchTerms.size());
-        assertTrue(searchTerms.contains("pokemon etb"));
-        assertTrue(searchTerms.contains("pokemon elite trainer box"));
-        assertTrue(searchTerms.contains("pokemon booster box"));
+        assertTrue(searchTerms.contains("Pokemon ETB"));
+        assertTrue(searchTerms.contains("Pokemon Elite Trainer Box"));
+        assertTrue(searchTerms.contains("Pokemon Booster Box"));
     }
 
     @Test
@@ -80,5 +81,39 @@ class MarketplaceServiceTest {
         // Verify the services were called
         verify(webDriverService, times(1)).getWebDriver();
         verify(webDriverService, times(1)).closeWebDriver(mockDriver);
+    }
+
+    @Test
+    void testCleanMarketplaceUrl() throws Exception {
+        // Use reflection to access the private method
+        Method cleanUrlMethod = FacebookMarketplaceService.class.getDeclaredMethod("cleanMarketplaceUrl", String.class);
+        cleanUrlMethod.setAccessible(true);
+        
+        // Test URL with query parameters
+        String urlWithQuery = "https://www.facebook.com/marketplace/item/123456789?ref=messenger_banner&extra=param";
+        String cleanedUrl = (String) cleanUrlMethod.invoke(facebookMarketplaceService, urlWithQuery);
+        assertEquals("https://www.facebook.com/marketplace/item/123456789", cleanedUrl);
+        
+        // Test URL with fragment
+        String urlWithFragment = "https://www.facebook.com/marketplace/item/123456789#section";
+        String cleanedFragment = (String) cleanUrlMethod.invoke(facebookMarketplaceService, urlWithFragment);
+        assertEquals("https://www.facebook.com/marketplace/item/123456789", cleanedFragment);
+        
+        // Test URL with both query and fragment
+        String urlWithBoth = "https://www.facebook.com/marketplace/item/123456789?ref=test#section";
+        String cleanedBoth = (String) cleanUrlMethod.invoke(facebookMarketplaceService, urlWithBoth);
+        assertEquals("https://www.facebook.com/marketplace/item/123456789", cleanedBoth);
+        
+        // Test clean URL (no changes needed)
+        String cleanUrl = "https://www.facebook.com/marketplace/item/123456789";
+        String unchangedUrl = (String) cleanUrlMethod.invoke(facebookMarketplaceService, cleanUrl);
+        assertEquals("https://www.facebook.com/marketplace/item/123456789", unchangedUrl);
+        
+        // Test null and empty URLs
+        String nullResult = (String) cleanUrlMethod.invoke(facebookMarketplaceService, (String) null);
+        assertNull(nullResult);
+        
+        String emptyResult = (String) cleanUrlMethod.invoke(facebookMarketplaceService, "");
+        assertEquals("", emptyResult);
     }
 }

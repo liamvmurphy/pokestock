@@ -203,11 +203,26 @@ public class WebDriverService {
      */
     public boolean isBlocked(WebDriver driver) {
         String pageSource = driver.getPageSource().toLowerCase();
-        return pageSource.contains("blocked") || 
-               pageSource.contains("rate limit") ||
-               pageSource.contains("captcha") ||
-               pageSource.contains("please try again later") ||
-               driver.getTitle().toLowerCase().contains("error");
+        String title = driver.getTitle().toLowerCase();
+        
+        // More specific blocking patterns to avoid false positives
+        boolean blocked = pageSource.contains("you are blocked") || 
+                         pageSource.contains("access denied") ||
+                         pageSource.contains("temporarily blocked");
+        boolean rateLimit = pageSource.contains("rate limit") || 
+                           pageSource.contains("too many requests");
+        boolean captcha = pageSource.contains("please complete the captcha") ||
+                         pageSource.contains("security check required") ||
+                         pageSource.contains("verify that you're human");
+        boolean tryAgain = pageSource.contains("please try again later");
+        boolean errorTitle = title.contains("error") || title.contains("blocked");
+        
+        boolean isBlocked = blocked || rateLimit || captcha || tryAgain || errorTitle;
+        
+        log.info("🚫 Block check result: {} (blocked: {}, rate: {}, captcha: {}, tryAgain: {}, errorTitle: {})", 
+                isBlocked, blocked, rateLimit, captcha, tryAgain, errorTitle);
+        
+        return isBlocked;
     }
 
     /**

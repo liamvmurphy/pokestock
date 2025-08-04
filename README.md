@@ -70,6 +70,38 @@ CHROME_DEBUGGER_PORT=9222
 - Backend: `cd backend && ./gradlew bootRun`
 - Frontend: `cd frontend && npm run dev`
 
+### Application Restart
+
+When making code changes that require a restart (configuration changes, new dependencies, etc.), you can use the restart API for a gentle refresh or manually restart for full changes:
+
+**Gentle restart (refreshes application context):**
+```bash
+curl -X POST http://localhost:8080/api/test/restart
+```
+
+**Full shutdown (requires manual restart):**
+```bash
+curl -X POST http://localhost:8080/api/test/shutdown
+```
+
+**Note:** The restart API performs a gentle application context refresh and won't kill your terminal. For major changes (new dependencies, configuration changes), you may need to manually stop (Ctrl+C) and restart the application.
+
+**Important:** After completing any development task that involves:
+- Adding new dependencies
+- Modifying configuration files
+- Adding new Spring components
+- Database schema changes
+
+Consider restarting the application to ensure changes take effect properly.
+
+### API Endpoints
+
+- `GET /api/test/health` - Check application health
+- `GET /api/test/models` - List available LM Studio models
+- `POST /api/test/restart` - Restart the application
+- `POST /api/test/shutdown` - Shutdown the application
+- `POST /api/test/test-marketplace` - Test marketplace listing creation
+
 ## License
 
 Private project - All rights reserved

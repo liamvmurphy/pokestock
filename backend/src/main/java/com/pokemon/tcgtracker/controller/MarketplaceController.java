@@ -50,16 +50,11 @@ public class MarketplaceController {
             
             CompletableFuture.runAsync(() -> {
                 try {
-                    for (String searchTerm : searchTerms) {
-                        log.info("Starting scraping for: {}", searchTerm);
-                        marketplaceScrapingService.scrapeMarketplaceItems(searchTerm, 15); // 15 items per search
-                        
-                        // Add delay between searches
-                        Thread.sleep(2500); // Reduced from 5000ms
-                    }
-                    log.info("Completed all marketplace scraping");
+                    log.info("Starting Facebook Marketplace monitoring with multi-tab support");
+                    facebookMarketplaceService.startMarketplaceMonitoring();
+                    log.info("Completed Facebook Marketplace monitoring");
                 } catch (Exception e) {
-                    log.error("Marketplace monitoring failed", e);
+                    log.error("Facebook Marketplace monitoring failed", e);
                 }
             });
 

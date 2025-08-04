@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
       "Bash(mkdir:*)",
@@ -23,9 +24,35 @@
       "WebFetch(domain:localhost)",
       "WebFetch(domain:localhost)",
       "Bash(taskkill:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(mv:*)",
+      "Bash(chmod:*)",
+      "Bash(java:*)",
+      "Bash(brew install:*)",
+      "Bash(export:*)",
+      "Bash(sudo ln:*)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew --version)",
+      "Bash(unzip:*)",
+      "Bash(../gradle-8.14.3/bin/gradle wrapper:*)",
+      "Bash(/Users/lmurphy/development/pokestock/gradle-8.14.3/bin/gradle wrapper --project-dir /Users/lmurphy/development/pokestock/backend)",
+      "Bash(./gradle-8.14.3/bin/gradle wrapper:*)",
+      "Bash(gradle-8.14.3/bin/gradle wrapper:*)",
+      "Bash(find:*)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew start)",
+      "Bash(grep:*)",
+      "Bash(env)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew --stacktrace tasks)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew --stop)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew clean)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew tasks --all)",
+      "Bash(chromedriver:*)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew test --tests MarketplaceServiceTest.testCleanMarketplaceUrl)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew test --tests MarketplaceServiceTest)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew compileJava)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew test --tests TestController)",
+      "Bash(/Users/lmurphy/development/pokestock/backend/gradlew build -x test)",
+      "Bash(/usr/bin/java:*)"
     ],
     "deny": []
-  },
-  "$schema": "https://json.schemastore.org/claude-code-settings.json"
+  }
 }

@@ -5,8 +5,11 @@ import com.pokemon.tcgtracker.service.GoogleSheetsService;
 import com.pokemon.tcgtracker.service.LMStudioService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.SpringApplication;
 import org.springframework.http.ResponseEntity;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -141,6 +144,121 @@ public class TestController {
             log.error("Failed to test browser", e);
             Map<String, Object> error = new HashMap<>();
             error.put("error", e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    @PostMapping("/restart")
+    public ResponseEntity<Map<String, Object>> restartApplication() {
+        try {
+            log.info("=".repeat(50));
+            log.info("🔄 APPLICATION RESTART REQUESTED VIA API");
+            log.info("=".repeat(50));
+            log.info("To restart the application:");
+            log.info("1. Press Ctrl+C in your terminal to stop the application");
+            log.info("2. Run: ./gradlew bootRun");
+            log.info("=".repeat(50));
+            
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "Restart request logged - please manually restart the application");
+            response.put("status", "restart_logged");
+            response.put("instructions", "Press Ctrl+C then run './gradlew bootRun' to restart");
+            response.put("note", "Safe restart that won't kill your terminal");
+            
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            log.error("Failed to log restart request", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            error.put("message", "Failed to log restart request");
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    @PostMapping("/refresh-beans")
+    public ResponseEntity<Map<String, Object>> refreshBeans() {
+        try {
+            log.info("🔄 Bean refresh requested via API");
+            
+            Map<String, Object> response = new HashMap<>();
+            Map<String, String> refreshResults = new HashMap<>();
+            
+            if (applicationContext instanceof ConfigurableApplicationContext) {
+                ConfigurableApplicationContext configurableContext = (ConfigurableApplicationContext) applicationContext;
+                ConfigurableListableBeanFactory beanFactory = configurableContext.getBeanFactory();
+                
+                // Try to refresh specific service beans safely
+                String[] serviceNames = {"facebookMarketplaceService", "webDriverService", "lmStudioService", "googleSheetsService"};
+                
+                for (String serviceName : serviceNames) {
+                    try {
+                        if (beanFactory.containsBean(serviceName)) {
+                            // Get bean info without recreating it
+                            Object bean = beanFactory.getBean(serviceName);
+                            refreshResults.put(serviceName, "Bean found and accessible: " + bean.getClass().getSimpleName());
+                            log.info("✓ Bean '{}' is healthy: {}", serviceName, bean.getClass().getSimpleName());
+                        } else {
+                            refreshResults.put(serviceName, "Bean not found");
+                            log.warn("✗ Bean '{}' not found", serviceName);
+                        }
+                    } catch (Exception e) {
+                        refreshResults.put(serviceName, "Error accessing bean: " + e.getMessage());
+                        log.error("✗ Error accessing bean '{}': {}", serviceName, e.getMessage());
+                    }
+                }
+                
+                response.put("message", "Bean refresh completed - verified bean accessibility");
+                response.put("status", "beans_verified");
+                response.put("results", refreshResults);
+                response.put("note", "Verified existing beans without recreating them");
+                
+            } else {
+                response.put("message", "Cannot refresh beans - application context not configurable");
+                response.put("status", "not_configurable");
+            }
+            
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            log.error("Failed to refresh beans", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            error.put("message", "Bean refresh failed");
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    @PostMapping("/shutdown")
+    public ResponseEntity<Map<String, Object>> shutdownApplication() {
+        try {
+            log.info("Application shutdown requested via API");
+            
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "Application shutdown initiated");
+            response.put("status", "shutting down");
+            
+            // Schedule the shutdown to happen after the response is sent
+            Thread shutdownThread = new Thread(() -> {
+                try {
+                    Thread.sleep(1000); // Give time for the response to be sent
+                    log.info("Shutting down Spring Boot application...");
+                    SpringApplication.exit(applicationContext, () -> 0);
+                } catch (Exception e) {
+                    log.error("Failed to shutdown application", e);
+                }
+            });
+            
+            shutdownThread.setDaemon(true);
+            shutdownThread.start();
+            
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            log.error("Failed to initiate shutdown", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            error.put("message", "Shutdown failed");
             return ResponseEntity.internalServerError().body(error);
         }
     }
