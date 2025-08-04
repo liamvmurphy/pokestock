@@ -1,8 +1,13 @@
 import type { Metadata } from "next"
-import { Inter } from "next/font/google"
+import { Nunito } from "next/font/google"
 import "./globals.css"
+import { ThemeProvider } from "@/components/theme-provider"
 
-const inter = Inter({ subsets: ["latin"] })
+const nunito = Nunito({ 
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700", "800"],
+  variable: "--font-nunito"
+})
 
 export const metadata: Metadata = {
   title: "Pokemon TCG Tracker",
@@ -16,7 +21,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={inter.className}>{children}</body>
+      <body className={`${nunito.className} ${nunito.variable}`}>
+        <ThemeProvider defaultTheme="dark" storageKey="tcg-tracker-theme">
+          {children}
+        </ThemeProvider>
+      </body>
     </html>
   )
 }

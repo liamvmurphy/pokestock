@@ -5,6 +5,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { ThemeToggle } from "@/components/theme-toggle"
 import {
   ShoppingCart,
   Store,
@@ -57,7 +58,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* Mobile sidebar backdrop */}
       {sidebarOpen && (
         <div 
-          className="fixed inset-0 z-40 bg-black bg-opacity-50 lg:hidden"
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -68,9 +69,14 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         sidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="flex items-center justify-between p-4 border-b">
-          <div className="flex items-center space-x-2">
-            <Zap className="h-8 w-8 text-blue-600" />
-            <span className="text-xl font-bold">TCG Tracker</span>
+          <div className="flex items-center space-x-3">
+            <div className="p-2 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg">
+              <Zap className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <span className="text-xl font-bold text-foreground">TCG Tracker</span>
+              <div className="text-xs text-muted-foreground">Pokemon Scanner</div>
+            </div>
           </div>
           <Button
             variant="ghost"
@@ -90,9 +96,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 key={item.name}
                 href={item.href}
                 className={cn(
-                  "flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+                  "flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200",
                   isActive
-                    ? "bg-primary text-primary-foreground"
+                    ? "bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg"
                     : "text-muted-foreground hover:text-foreground hover:bg-accent"
                 )}
               >
@@ -104,10 +110,13 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         </nav>
 
         <div className="absolute bottom-4 left-4 right-4">
-          <div className="p-3 bg-muted rounded-lg">
-            <div className="flex items-center space-x-2 text-sm">
-              <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse" />
-              <span className="text-muted-foreground">System Online</span>
+          <div className="p-4 bg-muted rounded-lg border">
+            <div className="flex items-center space-x-3">
+              <div className="h-3 w-3 bg-green-500 rounded-full animate-pulse" />
+              <div>
+                <div className="text-sm font-medium text-foreground">System Online</div>
+                <div className="text-xs text-muted-foreground">All services running</div>
+              </div>
             </div>
           </div>
         </div>
@@ -116,7 +125,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* Main content */}
       <div className="lg:pl-64">
         {/* Top bar */}
-        <header className="bg-card border-b px-4 py-3 lg:px-6">
+        <header className="bg-card border-b px-4 py-4 lg:px-6">
           <div className="flex items-center justify-between">
             <Button
               variant="ghost"
@@ -131,12 +140,19 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               <div className="text-sm text-muted-foreground">
                 Last updated: {new Date().toLocaleTimeString()}
               </div>
+              <div className="h-6 w-px bg-border"></div>
+              <div className="flex items-center space-x-2">
+                <Activity className="h-4 w-4 text-blue-500" />
+                <span className="text-sm text-foreground">Live Monitoring</span>
+              </div>
+              <div className="h-6 w-px bg-border"></div>
+              <ThemeToggle />
             </div>
           </div>
         </header>
 
         {/* Page content */}
-        <main className="p-4 lg:p-6">
+        <main className="bg-background min-h-screen">
           {children}
         </main>
       </div>

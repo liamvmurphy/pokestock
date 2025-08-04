@@ -54,6 +54,12 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-nunito;
+  }
+}
+
+@layer utilities {
+  .font-nunito {
+    font-family: var(--font-nunito), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
   }
 }

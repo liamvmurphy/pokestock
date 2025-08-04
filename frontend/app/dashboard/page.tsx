@@ -133,7 +133,7 @@ export default function Dashboard() {
         alert(`❌ Scraping failed: ${result.error || 'Unknown error'}`)
       }
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Scalable scraping failed:', error)
       alert('Scalable scraping failed: ' + error.message)
     }
@@ -170,7 +170,7 @@ export default function Dashboard() {
       // Pretty print the result
       alert(`LM Studio Analysis Result:\n\n${JSON.stringify(result, null, 2)}`)
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('LM Studio test failed:', error)
       alert('LM Studio test failed: ' + error.message)
     }

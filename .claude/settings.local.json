@@ -53,7 +53,9 @@
       "Bash(/Users/lmurphy/development/pokestock/backend/gradlew build -x test)",
       "Bash(/usr/bin/java:*)",
       "Bash(source:*)",
-      "Bash(sdk install:*)"
+      "Bash(sdk install:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx eslint:*)"
     ],
     "deny": []
   }
