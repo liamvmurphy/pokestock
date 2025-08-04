@@ -36,7 +36,7 @@ public class FacebookMarketplaceService {
 
     /**
      * Start monitoring Facebook Marketplace for Pokemon TCG listings
-     * Attempts multi-tab processing, falls back to optimized sequential processing
+     * Uses simple sequential processing in a single tab
      */
     public void startMarketplaceMonitoring() {
         WebDriver driver = null;
@@ -46,17 +46,39 @@ public class FacebookMarketplaceService {
             driver = webDriverService.getWebDriver();
             log.info("🚀 Starting Facebook Marketplace monitoring with {} search terms", SEARCH_TERMS.size());
             
-            // Check if we can create new tabs by testing one
-            log.info("🔍 Checking if multi-tab mode is possible...");
-            boolean canUseMultiTab = canCreateNewTabs(driver);
-            log.info("📊 Multi-tab capability result: {}", canUseMultiTab);
-            
-            if (canUseMultiTab) {
-                log.info("✅ Multi-tab mode: attempting to create separate tabs for each search");
-                allListings = processWithMultipleTabs(driver);
-            } else {
-                log.info("⚠️ Single-tab mode: processing searches sequentially in current tab");
-                allListings = processSequentially(driver);
+            // Process all search terms sequentially in a single tab
+            for (int i = 0; i < SEARCH_TERMS.size(); i++) {
+                String searchTerm = SEARCH_TERMS.get(i);
+                try {
+                    log.info("📍 Processing search {}/{}: '{}'", i + 1, SEARCH_TERMS.size(), searchTerm);
+                    
+                    String searchUrl = buildSearchUrl(searchTerm);
+                    driver.get(searchUrl);
+                    
+                    // Wait for page to load
+                    Thread.sleep(3000);
+                    
+                    // Check if login is required
+                    if (isLoginRequired(driver)) {
+                        log.warn("⚠️ Login required for search: {}", searchTerm);
+                        continue;
+                    }
+                    
+                    // Process search results with navigation to individual listings
+                    List<Map<String, Object>> listings = processSearchResultsWithNavigation(driver, searchTerm);
+                    allListings.addAll(listings);
+                    
+                    log.info("✅ Completed search {}/{}: found {} listings for '{}'", 
+                             i + 1, SEARCH_TERMS.size(), listings.size(), searchTerm);
+                    
+                    // Add delay between searches to be respectful
+                    if (i < SEARCH_TERMS.size() - 1) {
+                        webDriverService.humanDelay();
+                    }
+                    
+                } catch (Exception e) {
+                    log.error("❌ Error processing search term '{}': {}", searchTerm, e.getMessage());
+                }
             }
             
             log.info("🏁 Marketplace monitoring completed. Total listings processed: {}", allListings.size());
@@ -69,503 +91,302 @@ public class FacebookMarketplaceService {
     }
     
     /**
-     * Test if we can use multiple tabs (either create new ones or use existing ones)
+     * Process search results with navigation to individual listing pages
+     * This method navigates to each listing page for detailed scraping
      */
-    private boolean canCreateNewTabs(WebDriver driver) {
-        try {
-            Set<String> allTabHandles = webDriverService.getAllTabHandles(driver);
-            int initialTabCount = allTabHandles.size();
-            
-            log.info("🔢 Checking multi-tab capability...");
-            log.info("📋 Current tab count: {}", initialTabCount);
-            log.info("📋 Required tabs for all searches: {}", SEARCH_TERMS.size());
-            log.info("📋 All tab handles: {}", allTabHandles);
-            
-            // If we already have enough tabs for all searches, we can use multi-tab mode
-            if (initialTabCount >= SEARCH_TERMS.size()) {
-                log.info("✅ Found {} existing tabs, which is enough for {} search terms. Using multi-tab mode!", 
-                         initialTabCount, SEARCH_TERMS.size());
-                return true;
-            }
-            
-            log.info("⚠️ Not enough existing tabs ({} < {}). Trying to create a test tab...", 
-                     initialTabCount, SEARCH_TERMS.size());
-            
-            // Try to create a single test tab
-            String originalTab = webDriverService.getCurrentTabHandle(driver);
-            log.info("📌 Original tab handle: {}", originalTab);
-            
-            // Try JavaScript approach
-            log.info("🧪 Attempting to create test tab with JavaScript...");
-            ((JavascriptExecutor) driver).executeScript("window.open('about:blank', '_blank');");
-            Thread.sleep(1000);
-            
-            Set<String> newTabHandles = webDriverService.getAllTabHandles(driver);
-            int newTabCount = newTabHandles.size();
-            log.info("📊 After tab creation attempt: {} tabs", newTabCount);
-            log.info("📋 New tab handles: {}", newTabHandles);
-            
-            if (newTabCount > initialTabCount) {
-                log.info("✅ Test tab created successfully!");
-                // Close the test tab
-                for (String handle : newTabHandles) {
-                    if (!allTabHandles.contains(handle)) {
-                        log.info("🗑️ Closing test tab: {}", handle);
-                        driver.switchTo().window(handle);
-                        driver.close();
-                        break;
-                    }
-                }
-                // Return to original tab
-                driver.switchTo().window(originalTab);
-                log.info("✅ Tab creation test successful - can create new tabs programmatically");
-                return true;
-            } else {
-                log.warn("❌ Cannot create new tabs programmatically. To use multi-tab mode, manually open {} total tabs in Chrome", SEARCH_TERMS.size());
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("❌ Tab capability test failed with exception: {}", e.getMessage(), e);
-            return false;
-        }
-    }
-    
-    /**
-     * Process searches using multiple tabs (if possible)
-     */
-    private List<Map<String, Object>> processWithMultipleTabs(WebDriver driver) {
-        List<Map<String, Object>> allListings = new ArrayList<>();
-        
-        try {
-            Set<String> allTabHandles = webDriverService.getAllTabHandles(driver);
-            List<String> tabHandlesList = new ArrayList<>(allTabHandles);
-            
-            log.info("Found {} existing tabs for multi-tab processing", tabHandlesList.size());
-            
-            if (tabHandlesList.size() < SEARCH_TERMS.size()) {
-                log.warn("Not enough tabs ({}) for all search terms ({}). Need to manually open more tabs or will fall back to sequential.", 
-                         tabHandlesList.size(), SEARCH_TERMS.size());
-                return processSequentially(driver);
-            }
-            
-            // Step 1: Navigate each tab to its search URL
-            Map<String, String> tabToSearchTerm = new HashMap<>();
-            log.info("=== TAB DEBUGGING INFO ===");
-            log.info("Available tab handles: {}", tabHandlesList);
-            log.info("Current tab before starting: {}", webDriverService.getCurrentTabHandle(driver));
-            log.info("Total tabs detected: {}", tabHandlesList.size());
-            log.info("Search terms to process: {}", SEARCH_TERMS);
-            log.info("========================");
-            
-            for (int i = 0; i < SEARCH_TERMS.size(); i++) {
-                String searchTerm = SEARCH_TERMS.get(i);
-                String tabHandle = tabHandlesList.get(i);
-                String searchUrl = buildSearchUrl(searchTerm);
-                
-                try {
-                    log.info("=== PROCESSING TAB {} ===", i + 1);
-                    log.info("Target tab handle: {}", tabHandle);
-                    log.info("Search term: '{}'", searchTerm);
-                    log.info("Search URL: {}", searchUrl);
-                    
-                    // Check current tab before switching
-                    String currentTabBefore = webDriverService.getCurrentTabHandle(driver);
-                    log.info("Current tab before switch: {}", currentTabBefore);
-                    
-                    boolean switchSuccess = webDriverService.switchToTab(driver, tabHandle);
-                    log.info("Switch to tab result: {}", switchSuccess);
-                    
-                    if (!switchSuccess) {
-                        log.error("FAILED to switch to tab {}", tabHandle);
-                        continue;
-                    }
-                    
-                    // Verify we actually switched
-                    String currentTabAfter = webDriverService.getCurrentTabHandle(driver);
-                    log.info("Current tab after switch: {}", currentTabAfter);
-                    log.info("Switch successful: {}", tabHandle.equals(currentTabAfter));
-                    
-                    String urlBeforeNavigation = driver.getCurrentUrl();
-                    log.info("URL before navigation: {}", urlBeforeNavigation);
-                    
-                    // Navigate to search URL
-                    driver.get(searchUrl);
-                    
-                    // Verify navigation
-                    String urlAfterNavigation = driver.getCurrentUrl();
-                    log.info("URL after navigation: {}", urlAfterNavigation);
-                    log.info("Navigation successful: {}", urlAfterNavigation.contains("marketplace"));
-                    
-                    tabToSearchTerm.put(tabHandle, searchTerm);
-                    log.info("=== TAB {} SETUP COMPLETE ===", i + 1);
-                    
-                    // Small delay between navigations
-                    Thread.sleep(1000);
-                } catch (Exception e) {
-                    log.error("ERROR in tab {} for '{}': {}", i + 1, searchTerm, e.getMessage(), e);
-                }
-            }
-            
-            log.info("=== NAVIGATION SUMMARY ===");
-            log.info("Tab to search term mapping: {}", tabToSearchTerm);
-            log.info("Successfully configured {} tabs", tabToSearchTerm.size());
-            log.info("=========================");
-            
-            log.info("All {} tabs navigated to their search URLs. Waiting for pages to load...", SEARCH_TERMS.size());
-            Thread.sleep(3000); // Give all tabs time to load
-            
-            // Step 2: Process all tabs concurrently by switching between them
-            log.info("=== STARTING CONCURRENT RESULT PROCESSING ===");
-            
-            // Process up to 15 items total, switching between tabs
-            int totalItemsProcessed = 0;
-            int maxItemsPerSearch = 15;
-            int maxTotalItems = maxItemsPerSearch * tabToSearchTerm.size(); // 45 total
-            
-            // Track how many items we've processed per tab
-            Map<String, Integer> itemsPerTab = new HashMap<>();
-            for (String tabHandle : tabToSearchTerm.keySet()) {
-                itemsPerTab.put(tabHandle, 0);
-            }
-            
-            List<String> availableTabs = new ArrayList<>(tabToSearchTerm.keySet());
-            int currentTabIndex = 0;
-            
-            log.info("🚀 Starting concurrent processing across {} tabs for up to {} total items", 
-                     availableTabs.size(), maxTotalItems);
-            
-            while (totalItemsProcessed < maxTotalItems && !availableTabs.isEmpty()) {
-                String currentTabHandle = availableTabs.get(currentTabIndex);
-                String searchTerm = tabToSearchTerm.get(currentTabHandle);
-                int processedInThisTab = itemsPerTab.get(currentTabHandle);
-                
-                // Skip this tab if it's already processed its limit
-                if (processedInThisTab >= maxItemsPerSearch) {
-                    availableTabs.remove(currentTabIndex);
-                    if (!availableTabs.isEmpty()) {
-                        currentTabIndex = currentTabIndex % availableTabs.size();
-                    }
-                    continue;
-                }
-                
-                try {
-                    log.info("🔄 Processing item {}/{} from tab '{}' (term: '{}')", 
-                             processedInThisTab + 1, maxItemsPerSearch, currentTabHandle, searchTerm);
-                    
-                    // Switch to current tab
-                    boolean switchSuccess = webDriverService.switchToTab(driver, currentTabHandle);
-                    if (!switchSuccess) {
-                        log.error("❌ Failed to switch to tab {}", currentTabHandle);
-                        availableTabs.remove(currentTabIndex);
-                        if (!availableTabs.isEmpty()) {
-                            currentTabIndex = currentTabIndex % availableTabs.size();
-                        }
-                        continue;
-                    }
-                    
-                    // Process one item from this tab
-                    List<Map<String, Object>> singleListing = processSingleListingFromTab(driver, searchTerm, processedInThisTab);
-                    
-                    if (!singleListing.isEmpty()) {
-                        allListings.addAll(singleListing);
-                        totalItemsProcessed++;
-                        itemsPerTab.put(currentTabHandle, processedInThisTab + 1);
-                        
-                        log.info("✅ Processed 1 listing from '{}'. Total: {}/{}. Tab progress: {}/{}", 
-                                 searchTerm, totalItemsProcessed, maxTotalItems, 
-                                 itemsPerTab.get(currentTabHandle), maxItemsPerSearch);
-                    } else {
-                        log.warn("⚠️ No more listings found in tab '{}' after {} items", searchTerm, processedInThisTab);
-                        // Remove this tab from rotation if no more items
-                        availableTabs.remove(currentTabIndex);
-                        if (!availableTabs.isEmpty()) {
-                            currentTabIndex = currentTabIndex % availableTabs.size();
-                        }
-                        continue;
-                    }
-                    
-                    // Move to next tab
-                    currentTabIndex = (currentTabIndex + 1) % availableTabs.size();
-                    
-                    // Small delay between tab switches
-                    Thread.sleep(500);
-                    
-                } catch (Exception e) {
-                    log.error("❌ Error processing from tab '{}': {}", searchTerm, e.getMessage());
-                    // Move to next tab on error
-                    currentTabIndex = (currentTabIndex + 1) % availableTabs.size();
-                }
-            }
-            
-            log.info("🏁 Concurrent processing completed. Processed {} total items across {} tabs", 
-                     totalItemsProcessed, tabToSearchTerm.size());
-            for (Map.Entry<String, Integer> entry : itemsPerTab.entrySet()) {
-                String tabHandle = entry.getKey();
-                String searchTerm = tabToSearchTerm.get(tabHandle);
-                log.info("📊 Tab '{}': {} items processed", searchTerm, entry.getValue());
-            }
-            
-            log.info("Multi-tab processing completed. Total listings: {}", allListings.size());
-            
-        } catch (Exception e) {
-            log.error("Error in multi-tab processing, falling back to sequential: {}", e.getMessage());
-            return processSequentially(driver);
-        }
-        
-        return allListings;
-    }
-    
-    /**
-     * Process a single listing from the current tab
-     */
-    private List<Map<String, Object>> processSingleListingFromTab(WebDriver driver, String searchTerm, int itemIndex) {
+    private List<Map<String, Object>> processSearchResultsWithNavigation(WebDriver driver, String searchTerm) {
         List<Map<String, Object>> listings = new ArrayList<>();
-        String originalUrl = null;
+        String searchResultsUrl = driver.getCurrentUrl();
         
         try {
-            // Store original URL to return to search results
-            originalUrl = driver.getCurrentUrl();
+            // Scroll to load more listings
+            webDriverService.humanLikeScroll(driver);
+            Thread.sleep(2000);
             
-            // Check if we need to log in
-            if (isLoginRequired(driver)) {
-                log.warn("Login required for search: {}", searchTerm);
-                return listings;
-            }
-
-            // Wait for listings to load if this is the first item
-            if (itemIndex == 0) {
-                Thread.sleep(2000);
-                // Scroll to load more listings
-                webDriverService.humanLikeScroll(driver);
-            }
+            // Find all listing URLs on the search results page
+            List<String> listingUrls = collectListingUrls(driver);
+            log.info("📋 Found {} listing URLs for '{}'", listingUrls.size(), searchTerm);
             
-            // Find listing elements on the search results page
-            List<WebElement> listingElements = findListingElements(driver);
-            log.debug("Found {} potential listings for '{}' on attempt {}", listingElements.size(), searchTerm, itemIndex + 1);
-
-            // Process the specific item we want (by index)
-            if (itemIndex < listingElements.size()) {
-                WebElement listingElement = listingElements.get(itemIndex);
+            // Process up to 15 listings per search term
+            int maxItems = 15;
+            int processedCount = 0;
+            
+            for (String listingUrl : listingUrls) {
+                if (processedCount >= maxItems) {
+                    log.info("📊 Reached {} item limit for search term '{}'", maxItems, searchTerm);
+                    break;
+                }
                 
                 try {
-                    // Extract the listing URL from the element
-                    String listingUrl = listingElement.getAttribute("href");
-                    if (listingUrl == null || !listingUrl.contains("/marketplace/item/")) {
-                        log.warn("Invalid listing URL at index {}: {}", itemIndex, listingUrl);
-                        return listings;
-                    }
-                    
                     // Clean the URL
                     String cleanUrl = cleanMarketplaceUrl(listingUrl);
-                    log.info("🔗 Navigating to listing {}: {}", itemIndex + 1, cleanUrl);
                     
-                    // Navigate to the individual listing page in this tab
+                    // Check if this URL should be refreshed (7-day rule)
+                    if (!shouldProcessUrl(cleanUrl)) {
+                        log.info("⏭️ Skipping URL (recently updated): {}", cleanUrl);
+                        continue;
+                    }
+                    
+                    log.info("🔗 Navigating to listing {}/{}: {}", processedCount + 1, maxItems, cleanUrl);
+                    
+                    // Navigate to the individual listing page
                     driver.get(cleanUrl);
                     Thread.sleep(3000); // Wait for listing page to load
                     
                     // Check if we're on the correct listing page
                     String currentUrl = driver.getCurrentUrl();
                     if (!currentUrl.contains("/marketplace/item/")) {
-                        log.warn("Failed to navigate to listing page. Current URL: {}", currentUrl);
-                        return listings;
+                        log.warn("⚠️ Failed to navigate to listing page. Current URL: {}", currentUrl);
+                        continue;
                     }
                     
-                    // Check again for login after navigation
+                    // Check for login requirement
                     if (isLoginRequired(driver)) {
-                        log.warn("Login required on listing page for: {}", cleanUrl);
-                        return listings;
+                        log.warn("⚠️ Login required on listing page");
+                        break;
                     }
                     
                     // Extract listing data from the individual listing page
                     Map<String, Object> listing = extractListingDataFromPage(driver, cleanUrl, searchTerm);
                     if (listing != null && !listing.isEmpty()) {
-                        listings.add(listing);
-                        
                         // Use LM Studio to analyze the listing
-                        analyzeListingWithAI(listing);
+                        List<Map<String, Object>> itemsFromListing = analyzeListingWithAI(listing);
                         
-                        // Save to Google Sheets
-                        googleSheetsService.addMarketplaceListing(listing);
-                        
-                        log.info("✅ Successfully processed listing {}: {}", itemIndex + 1, listing.get("itemName"));
+                        if (!itemsFromListing.isEmpty()) {
+                            listings.addAll(itemsFromListing);
+                            processedCount++;
+                            
+                            // Save all items to Google Sheets (will delete old rows and add new ones)
+                            googleSheetsService.addMarketplaceListings(itemsFromListing);
+                            
+                            log.info("✅ Successfully processed listing {}/{} with {} items from: {}", 
+                                    processedCount, maxItems, itemsFromListing.size(), cleanUrl);
+                        } else {
+                            log.warn("⚠️ No items extracted from listing: {}", cleanUrl);
+                        }
                     }
                     
-                    // Navigate back to search results for next iteration
-                    log.debug("🔙 Returning to search results: {}", originalUrl);
-                    driver.get(originalUrl);
+                    // Navigate back to search results
+                    log.debug("🔙 Returning to search results");
+                    driver.get(searchResultsUrl);
                     Thread.sleep(2000); // Wait for search page to reload
                     
                 } catch (Exception e) {
-                    log.warn("Failed to process listing element {}: {}", itemIndex + 1, e.getMessage());
-                    // Try to return to search results even if processing failed
+                    log.warn("⚠️ Failed to process listing: {}", e.getMessage());
+                    // Try to return to search results
                     try {
-                        if (originalUrl != null) {
-                            driver.get(originalUrl);
-                            Thread.sleep(1000);
-                        }
+                        driver.get(searchResultsUrl);
+                        Thread.sleep(1000);
                     } catch (Exception ex) {
                         log.warn("Failed to return to search results: {}", ex.getMessage());
                     }
                 }
-            } else {
-                log.debug("No listing found at index {} for search '{}'", itemIndex, searchTerm);
             }
             
         } catch (Exception e) {
-            log.error("Failed to process single listing from tab for term '{}': {}", searchTerm, e.getMessage());
-            // Try to return to original URL if possible
-            try {
-                if (originalUrl != null) {
-                    driver.get(originalUrl);
-                    Thread.sleep(1000);
-                }
-            } catch (Exception ex) {
-                log.warn("Failed to return to original URL: {}", ex.getMessage());
-            }
+            log.error("❌ Failed to process search results for term '{}': {}", searchTerm, e.getMessage());
         }
         
         return listings;
     }
     
     /**
-     * Process searches sequentially in the same tab with optimizations
+     * Collect listing URLs from the current search results page
      */
-    private List<Map<String, Object>> processSequentially(WebDriver driver) {
+    private List<String> collectListingUrls(WebDriver driver) {
+        List<String> urls = new ArrayList<>();
+        
+        try {
+            // Find listing elements using multiple selectors
+            List<WebElement> listingElements = findListingElements(driver);
+            
+            for (WebElement element : listingElements) {
+                try {
+                    String href = element.getAttribute("href");
+                    if (href != null && href.contains("/marketplace/item/")) {
+                        urls.add(href);
+                    }
+                } catch (Exception e) {
+                    log.debug("Failed to extract URL from element: {}", e.getMessage());
+                }
+            }
+            
+            log.info("📝 Collected {} valid listing URLs", urls.size());
+            
+        } catch (Exception e) {
+            log.error("❌ Error collecting listing URLs: {}", e.getMessage());
+        }
+        
+        return urls;
+    }
+    
+    /**
+     * Check if a URL should be processed based on 7-day rule
+     */
+    private boolean shouldProcessUrl(String url) {
+        try {
+            return googleSheetsService.shouldRefreshUrl(url);
+        } catch (Exception e) {
+            log.warn("Failed to check URL refresh status, will process: {}", e.getMessage());
+            return true; // Process if we can't check
+        }
+    }
+
+    /**
+     * Scrape Facebook Marketplace with dynamic search term and item limit
+     * This replaces the functionality from MarketplaceScrapingService
+     */
+    public List<Map<String, Object>> scrapeMarketplaceItems(String searchTerm, int maxItems) {
+        WebDriver driver = null;
         List<Map<String, Object>> allListings = new ArrayList<>();
         
         try {
-            for (int i = 0; i < SEARCH_TERMS.size(); i++) {
-                String searchTerm = SEARCH_TERMS.get(i);
-                try {
-                    log.info("Processing search {}/{}: '{}'", i + 1, SEARCH_TERMS.size(), searchTerm);
-                    
-                    String searchUrl = buildSearchUrl(searchTerm);
-                    driver.get(searchUrl);
-                    
-                    // Wait for page to load
-                    Thread.sleep(2000);
-                    
-                    List<Map<String, Object>> listings = processSearchResults(driver, searchTerm);
-                    allListings.addAll(listings);
-                    
-                    log.info("Completed search {}/{}: found {} listings for '{}'", 
-                             i + 1, SEARCH_TERMS.size(), listings.size(), searchTerm);
-                    
-                    // Add delay between searches to be respectful
-                    if (i < SEARCH_TERMS.size() - 1) {
-                        webDriverService.humanDelay();
-                    }
-                    
-                } catch (Exception e) {
-                    log.error("Error processing search term '{}': {}", searchTerm, e.getMessage());
-                }
+            driver = webDriverService.getWebDriver();
+            log.info("🚀 Starting marketplace scraping for '{}' with max {} items", searchTerm, maxItems);
+            
+            String searchUrl = buildSearchUrl(searchTerm);
+            driver.get(searchUrl);
+            
+            // Wait for page to load
+            Thread.sleep(3000);
+            
+            // Check if login is required
+            if (isLoginRequired(driver)) {
+                log.warn("Login required for marketplace scraping");
+                return allListings;
             }
+            
+            // Process search results with navigation to individual listings
+            allListings = processSearchResultsWithNavigation(driver, searchTerm, maxItems);
+            
+            log.info("🏁 Marketplace scraping completed. Processed {} listings", allListings.size());
+            
         } catch (Exception e) {
-            log.error("Error in sequential processing: {}", e.getMessage());
+            log.error("❌ Failed to scrape marketplace items", e);
+        } finally {
+            webDriverService.closeWebDriver(driver);
         }
         
         return allListings;
     }
-
+    
+    /**
+     * Process search results with navigation to individual listing pages (with custom max items)
+     */
+    private List<Map<String, Object>> processSearchResultsWithNavigation(WebDriver driver, String searchTerm, int maxItems) {
+        List<Map<String, Object>> listings = new ArrayList<>();
+        String searchResultsUrl = driver.getCurrentUrl();
+        
+        try {
+            // Scroll to load more listings
+            webDriverService.humanLikeScroll(driver);
+            Thread.sleep(2000);
+            
+            // Find all listing URLs on the search results page
+            List<String> listingUrls = collectListingUrls(driver);
+            log.info("📋 Found {} listing URLs for '{}'", listingUrls.size(), searchTerm);
+            
+            int processedCount = 0;
+            
+            for (String listingUrl : listingUrls) {
+                if (processedCount >= maxItems) {
+                    log.info("📊 Reached {} item limit for search term '{}'", maxItems, searchTerm);
+                    break;
+                }
+                
+                try {
+                    // Clean the URL
+                    String cleanUrl = cleanMarketplaceUrl(listingUrl);
+                    
+                    // Check if this URL should be refreshed (7-day rule)
+                    if (!shouldProcessUrl(cleanUrl)) {
+                        log.info("⏭️ Skipping URL (recently updated): {}", cleanUrl);
+                        continue;
+                    }
+                    
+                    log.info("🔗 Navigating to listing {}/{}: {}", processedCount + 1, maxItems, cleanUrl);
+                    
+                    // Navigate to the individual listing page
+                    driver.get(cleanUrl);
+                    Thread.sleep(3000); // Wait for listing page to load
+                    
+                    // Check if we're on the correct listing page
+                    String currentUrl = driver.getCurrentUrl();
+                    if (!currentUrl.contains("/marketplace/item/")) {
+                        log.warn("⚠️ Failed to navigate to listing page. Current URL: {}", currentUrl);
+                        continue;
+                    }
+                    
+                    // Check for login requirement
+                    if (isLoginRequired(driver)) {
+                        log.warn("⚠️ Login required on listing page");
+                        break;
+                    }
+                    
+                    // Extract listing data from the individual listing page
+                    Map<String, Object> listing = extractListingDataFromPage(driver, cleanUrl, searchTerm);
+                    if (listing != null && !listing.isEmpty()) {
+                        // Use LM Studio to analyze the listing
+                        List<Map<String, Object>> itemsFromListing = analyzeListingWithAI(listing);
+                        
+                        if (!itemsFromListing.isEmpty()) {
+                            listings.addAll(itemsFromListing);
+                            processedCount++;
+                            
+                            // Save all items to Google Sheets (will delete old rows and add new ones)
+                            googleSheetsService.addMarketplaceListings(itemsFromListing);
+                            
+                            log.info("✅ Successfully processed listing {}/{} with {} items from: {}", 
+                                    processedCount, maxItems, itemsFromListing.size(), cleanUrl);
+                        } else {
+                            log.warn("⚠️ No items extracted from listing: {}", cleanUrl);
+                        }
+                    }
+                    
+                    // Navigate back to search results
+                    log.debug("🔙 Returning to search results");
+                    driver.get(searchResultsUrl);
+                    Thread.sleep(2000); // Wait for search page to reload
+                    
+                } catch (Exception e) {
+                    log.warn("⚠️ Failed to process listing: {}", e.getMessage());
+                    // Try to return to search results
+                    try {
+                        driver.get(searchResultsUrl);
+                        Thread.sleep(1000);
+                    } catch (Exception ex) {
+                        log.warn("Failed to return to search results: {}", ex.getMessage());
+                    }
+                }
+            }
+            
+        } catch (Exception e) {
+            log.error("❌ Failed to process search results for term '{}': {}", searchTerm, e.getMessage());
+        }
+        
+        return listings;
+    }
+    
     /**
      * Search Facebook Marketplace for specific term (legacy method for single searches)
      */
     public List<Map<String, Object>> searchMarketplace(WebDriver driver, String searchTerm) {
         List<Map<String, Object>> listings = new ArrayList<>();
-        String originalTab = null;
         
         try {
             String searchUrl = buildSearchUrl(searchTerm);
             log.info("Searching marketplace for: {}", searchTerm);
             
-            // Store the original tab handle
-            originalTab = webDriverService.getCurrentTabHandle(driver);
+            // Navigate to search URL
+            webDriverService.navigateToUrl(driver, searchUrl);
             
-            // Open search in new tab
-            boolean openedNewTab = webDriverService.openNewTabWithUrl(driver, searchUrl);
-            if (!openedNewTab) {
-                log.warn("Failed to open new tab, using current tab instead");
-                webDriverService.navigateToUrl(driver, searchUrl);
-            }
-            
-            // Process the search results
-            listings = processSearchResults(driver, searchTerm);
-            
-            // Close the tab if we opened a new one
-            if (originalTab != null && webDriverService.getAllTabHandles(driver).size() > 1) {
-                webDriverService.closeCurrentTab(driver, originalTab);
-            }
+            // Process the search results with default 15 items limit
+            listings = processSearchResultsWithNavigation(driver, searchTerm, 15);
 
         } catch (Exception e) {
             log.error("Failed to search marketplace for term: {}", searchTerm, e);
-            // Try to return to original tab if possible
-            if (originalTab != null) {
-                try {
-                    webDriverService.switchToTab(driver, originalTab);
-                } catch (Exception ex) {
-                    log.warn("Failed to switch back to original tab", ex);
-                }
-            }
         }
 
-        return listings;
-    }
-    
-    /**
-     * Process search results from the current tab
-     * Extracts listings from the page, analyzes them, and saves to Google Sheets
-     */
-    private List<Map<String, Object>> processSearchResults(WebDriver driver, String searchTerm) {
-        List<Map<String, Object>> listings = new ArrayList<>();
-        
-        try {
-            // Check if we need to log in
-            if (isLoginRequired(driver)) {
-                log.warn("Login required for search: {}", searchTerm);
-                return listings;
-            }
-
-            // Wait for listings to load
-            Thread.sleep(3000);
-            
-            // Scroll to load more listings
-            webDriverService.humanLikeScroll(driver);
-            
-            // Find listing elements (limited to 15 per search)
-            List<WebElement> listingElements = findListingElements(driver);
-            log.info("Found {} potential listings for '{}'", listingElements.size(), searchTerm);
-
-            // Process up to 15 listings per search
-            int processedCount = 0;
-            for (WebElement listingElement : listingElements) {
-                if (processedCount >= 15) {
-                    log.info("Reached 15 listing limit for search term '{}'", searchTerm);
-                    break;
-                }
-                
-                try {
-                    Map<String, Object> listing = extractListingData(driver, listingElement, searchTerm);
-                    if (listing != null && !listing.isEmpty()) {
-                        listings.add(listing);
-                        processedCount++;
-                        
-                        // Use LM Studio to analyze the listing
-                        analyzeListingWithAI(listing);
-                        
-                        // Save to Google Sheets
-                        googleSheetsService.addMarketplaceListing(listing);
-                        
-                        log.info("Processed listing {}/15: {}", processedCount, listing.get("itemName"));
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to process listing element: {}", e.getMessage());
-                }
-            }
-            
-        } catch (Exception e) {
-            log.error("Failed to process search results for term '{}': {}", searchTerm, e.getMessage());
-        }
-        
         return listings;
     }
 
@@ -589,13 +410,8 @@ public class FacebookMarketplaceService {
         boolean sourceLogin = pageSource.contains("Log in to Facebook");
         boolean sourceAccount = pageSource.contains("Create new account");
         
-        log.debug("Login check - URL: {}", currentUrl);
-        log.debug("Login check - URL contains /login: {}", urlLogin);
-        log.debug("Login check - Page contains 'Log in to Facebook': {}", sourceLogin);
-        log.debug("Login check - Page contains 'Create new account': {}", sourceAccount);
-        
         boolean loginRequired = urlLogin || sourceLogin || sourceAccount;
-        log.info("🔍 Login required check result: {} (URL: {}, LogText: {}, AccText: {})", 
+        log.debug("🔍 Login required check: {} (URL: {}, LogText: {}, AccText: {})", 
                 loginRequired, urlLogin, sourceLogin, sourceAccount);
         
         return loginRequired;
@@ -619,7 +435,8 @@ public class FacebookMarketplaceService {
             try {
                 List<WebElement> found = driver.findElements(By.cssSelector(selector));
                 if (!found.isEmpty()) {
-                    elements.addAll(found.subList(0, Math.min(found.size(), 20))); // Limit to 20 items (to ensure we can get 15 valid ones)
+                    elements = found;
+                    log.debug("Found {} elements with selector: {}", found.size(), selector);
                     break;
                 }
             } catch (Exception e) {
@@ -628,60 +445,6 @@ public class FacebookMarketplaceService {
         }
 
         return elements;
-    }
-
-    /**
-     * Extract data from a listing element (used for search results page)
-     */
-    private Map<String, Object> extractListingData(WebDriver driver, WebElement listingElement, String searchTerm) {
-        Map<String, Object> listing = new HashMap<>();
-        
-        try {
-            // Get listing URL
-            String listingUrl = listingElement.getAttribute("href");
-            if (listingUrl == null || !listingUrl.contains("/marketplace/item/")) {
-                return null;
-            }
-            // Clean URL by removing query parameters
-            String cleanUrl = cleanMarketplaceUrl(listingUrl);
-            listing.put("url", cleanUrl);
-
-            // Extract text content
-            String listingText = listingElement.getText();
-            if (listingText.isEmpty()) {
-                return null;
-            }
-
-            // Extract title/item name
-            String itemName = extractItemName(listingElement, listingText);
-            listing.put("itemName", itemName);
-
-            // Extract price
-            Double price = extractPrice(listingText);
-            if (price != null) {
-                listing.put("price", price);
-            }
-
-            // Extract seller info
-            String seller = extractSeller(listingElement);
-            listing.put("seller", seller != null ? seller : "Unknown");
-
-            // Set metadata
-            listing.put("searchTerm", searchTerm);
-            listing.put("dateFound", new Date());
-            listing.put("status", "New");
-            listing.put("source", "Facebook Marketplace");
-
-            // Take screenshot for AI analysis
-            String screenshot = webDriverService.takeScreenshot(driver);
-            listing.put("screenshot", screenshot);
-
-            return listing;
-
-        } catch (Exception e) {
-            log.warn("Failed to extract listing data: {}", e.getMessage());
-            return null;
-        }
     }
 
     /**
@@ -702,6 +465,9 @@ public class FacebookMarketplaceService {
             listing.put("status", "New");
             listing.put("source", "Facebook Marketplace");
 
+            // Try to expand the listing by clicking "See more" before taking screenshot
+            expandListingDescription(driver);
+            
             // Take screenshot from the actual listing page for AI analysis - this is the key part
             log.info("📸 Taking screenshot of listing page for AI analysis");
             String screenshot = webDriverService.takeScreenshot(driver);
@@ -718,25 +484,26 @@ public class FacebookMarketplaceService {
     }
 
     /**
-     * Extract item name from listing element
+     * Extract item name from listing element or text
      */
-    private String extractItemName(WebElement element, String text) {
+    private String extractItemName(String text) {
         try {
-            // Try to find title element first
-            List<WebElement> titleElements = element.findElements(By.tagName("span"));
-            for (WebElement titleElement : titleElements) {
-                String title = titleElement.getText();
-                if (title.length() > 10 && isPokemonTcgRelated(title)) {
-                    return title;
-                }
-            }
-
-            // Fallback to first line of text
+            // Try to extract first line or meaningful text
             String[] lines = text.split("\\n");
             if (lines.length > 0) {
-                return lines[0];
+                // Look for lines that might be the title
+                for (String line : lines) {
+                    if (line.length() > 10 && isPokemonTcgRelated(line)) {
+                        return line.trim();
+                    }
+                }
+                // Default to first non-empty line
+                for (String line : lines) {
+                    if (line.trim().length() > 5) {
+                        return line.trim();
+                    }
+                }
             }
-
             return "Unknown Item";
         } catch (Exception e) {
             return "Unknown Item";
@@ -758,26 +525,6 @@ public class FacebookMarketplaceService {
         }
         return null;
     }
-
-    /**
-     * Extract seller information
-     */
-    private String extractSeller(WebElement element) {
-        try {
-            // Look for seller name elements
-            List<WebElement> sellerElements = element.findElements(By.cssSelector("span, div"));
-            for (WebElement sellerElement : sellerElements) {
-                String text = sellerElement.getText();
-                if (text.length() > 3 && text.length() < 50 && !text.contains("$") && !isPokemonTcgRelated(text)) {
-                    return text;
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Could not extract seller info");
-        }
-        return null;
-    }
-
 
     /**
      * Check if text is Pokemon TCG related
@@ -828,9 +575,12 @@ public class FacebookMarketplaceService {
     }
 
     /**
-     * Use LM Studio to analyze the listing
+     * Use LM Studio to analyze the listing and return all items found
+     * Returns a list of items, each with its own data but sharing the same URL
      */
-    private void analyzeListingWithAI(Map<String, Object> listing) {
+    private List<Map<String, Object>> analyzeListingWithAI(Map<String, Object> listing) {
+        List<Map<String, Object>> allItems = new ArrayList<>();
+        
         try {
             String description = String.format("Item: %s, Price: %s, Seller: %s", 
                     listing.get("itemName"), 
@@ -843,14 +593,67 @@ public class FacebookMarketplaceService {
                 String model = getConfiguredModel();
                 Map<String, Object> analysis = lmStudioService.analyzeMarketplaceListing(description, screenshot, model);
                 
-                // Merge AI analysis results into listing
+                // Extract AI analysis results
                 if (analysis != null && !analysis.containsKey("error")) {
-                    listing.putAll(analysis);
+                    // Extract shared top-level fields
+                    String mainListingPrice = (String) analysis.get("mainListingPrice");
+                    String extractedDescription = (String) analysis.get("extractedDescription");
+                    String location = (String) analysis.get("location");
+                    Boolean hasMultipleItems = (Boolean) analysis.get("hasMultipleItems");
+                    
+                    // Process each item from the analysis
+                    if (analysis.containsKey("items") && analysis.get("items") instanceof List) {
+                        List<Map<String, Object>> items = (List<Map<String, Object>>) analysis.get("items");
+                        
+                        for (Map<String, Object> item : items) {
+                            // Create a new listing entry for each item
+                            Map<String, Object> itemListing = new HashMap<>(listing);
+                            
+                            // Add item-specific data
+                            itemListing.put("itemName", item.get("itemName"));
+                            itemListing.put("set", item.get("set"));
+                            itemListing.put("productType", item.get("productType"));
+                            itemListing.put("price", item.get("price"));
+                            itemListing.put("quantity", item.get("quantity"));
+                            itemListing.put("priceUnit", item.get("priceUnit"));
+                            itemListing.put("notes", item.get("notes"));
+                            
+                            // Add shared data
+                            itemListing.put("mainListingPrice", mainListingPrice);
+                            itemListing.put("extractedDescription", extractedDescription);
+                            itemListing.put("location", location);
+                            itemListing.put("hasMultipleItems", hasMultipleItems);
+                            
+                            allItems.add(itemListing);
+                        }
+                        
+                        log.info("📦 Extracted {} items from listing with URL: {}", 
+                                items.size(), listing.get("url"));
+                    }
+                    
+                    // If no items were found, add the original listing as a single item
+                    if (allItems.isEmpty()) {
+                        listing.put("mainListingPrice", mainListingPrice);
+                        listing.put("extractedDescription", extractedDescription);
+                        listing.put("location", location);
+                        listing.put("hasMultipleItems", false);
+                        allItems.add(listing);
+                    }
                 }
             }
+            
+            // If AI analysis failed or no screenshot, return the original listing
+            if (allItems.isEmpty()) {
+                allItems.add(listing);
+            }
+            
         } catch (Exception e) {
             log.warn("Failed to analyze listing with AI: {}", e.getMessage());
+            // Return the original listing on error
+            allItems.add(listing);
         }
+        
+        return allItems;
     }
 
     /**
@@ -878,5 +681,61 @@ public class FacebookMarketplaceService {
      */
     public void setConfiguredModel(String model) {
         configurationService.updateLmStudioModel(model);
+    }
+    
+    /**
+     * Try to expand the listing description by clicking "See more" button
+     */
+    private void expandListingDescription(WebDriver driver) {
+        try {
+            log.debug("🔍 Looking for 'See more' button to expand description");
+            
+            WebElement seeMoreButton = null;
+            
+            // Use the specific selector that works for Facebook Marketplace
+            try {
+                // Using XPath to find span containing 'See more' text
+                seeMoreButton = driver.findElement(By.xpath("//span[contains(text(), 'See more')]"));
+                
+                if (seeMoreButton != null && seeMoreButton.isDisplayed()) {
+                    log.debug("✅ Found 'See more' button");
+                }
+            } catch (Exception e) {
+                log.debug("'See more' button not found: {}", e.getMessage());
+            }
+            
+            // If we found a "See more" button, click it
+            if (seeMoreButton != null && seeMoreButton.isDisplayed()) {
+                try {
+                    log.info("🖱️ Clicking 'See more' to expand description");
+                    
+                    // Scroll to the element first to ensure it's in view
+                    ((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", seeMoreButton);
+                    Thread.sleep(500);
+                    
+                    // Try regular click first
+                    seeMoreButton.click();
+                    Thread.sleep(1000); // Wait for expansion to complete
+                    
+                    log.info("✅ Successfully clicked 'See more' button");
+                    
+                } catch (Exception e) {
+                    log.debug("Regular click failed, trying JavaScript click: {}", e.getMessage());
+                    try {
+                        // Fallback to JavaScript click
+                        ((JavascriptExecutor) driver).executeScript("arguments[0].click();", seeMoreButton);
+                        Thread.sleep(1000);
+                        log.info("✅ Successfully clicked 'See more' button with JavaScript");
+                    } catch (Exception jsException) {
+                        log.warn("Failed to click 'See more' button: {}", jsException.getMessage());
+                    }
+                }
+            } else {
+                log.debug("📝 No 'See more' button found - description may already be fully expanded");
+            }
+            
+        } catch (Exception e) {
+            log.warn("Error while trying to expand listing description: {}", e.getMessage());
+        }
     }
 }

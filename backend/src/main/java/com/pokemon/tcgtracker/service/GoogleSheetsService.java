@@ -11,6 +11,7 @@ import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 @Slf4j
@@ -84,6 +85,85 @@ public class GoogleSheetsService {
         updateRow(INVENTORY_SHEET, 1, inventoryHeaders);
     }
 
+    /**
+     * Add multiple marketplace listings that share the same URL (for multi-item listings)
+     * This method will delete all existing rows with the URL and add the new items
+     */
+    public void addMarketplaceListings(List<Map<String, Object>> listings) throws IOException {
+        if (listings == null || listings.isEmpty()) {
+            return;
+        }
+        
+        // Get the URL from the first listing (all should have the same URL)
+        String url = (String) listings.get(0).getOrDefault("url", "");
+        if (url.isEmpty()) {
+            log.warn("No URL found in listings, skipping batch add");
+            return;
+        }
+        
+        // Delete all existing rows with this URL
+        int deletedRows = deleteRowsByUrl(MARKETPLACE_SHEET, url);
+        if (deletedRows > 0) {
+            log.info("Deleted {} existing rows for URL: {}", deletedRows, url);
+        }
+        
+        // Prepare all rows to add
+        List<List<Object>> rows = new ArrayList<>();
+        for (Map<String, Object> listing : listings) {
+            // Ensure quantity is an integer
+            Object quantityObj = listing.getOrDefault("quantity", 1);
+            int quantity = 1; // default
+            if (quantityObj instanceof Number) {
+                quantity = ((Number) quantityObj).intValue();
+            } else if (quantityObj instanceof String) {
+                try {
+                    quantity = Integer.parseInt((String) quantityObj);
+                } catch (NumberFormatException e) {
+                    quantity = 1; // fallback to 1 if parsing fails
+                }
+            }
+            
+            // Ensure productType is never empty - default to "OTHER"
+            String productType = (String) listing.getOrDefault("productType", "");
+            if (productType == null || productType.trim().isEmpty()) {
+                productType = "OTHER";
+            }
+            
+            // Ensure all fields have safe values (never null)
+            String itemName = listing.getOrDefault("itemName", "Unknown Item").toString();
+            String set = listing.getOrDefault("set", "").toString();
+            Object priceObj = listing.getOrDefault("price", "0.00");
+            String price = priceObj != null ? priceObj.toString() : "0.00";
+            String priceUnit = listing.getOrDefault("priceUnit", "each").toString();
+            String mainListingPrice = listing.getOrDefault("mainListingPrice", "").toString();
+            String location = listing.getOrDefault("location", "").toString();
+            Boolean hasMultipleItems = (Boolean) listing.getOrDefault("hasMultipleItems", false);
+            String notes = listing.getOrDefault("notes", "").toString();
+            
+            List<Object> row = Arrays.asList(
+                    LocalDateTime.now().format(DATE_FORMATTER),
+                    itemName.isEmpty() ? "Unknown Item" : itemName,
+                    set,
+                    productType, // Always has a value, defaults to "OTHER"
+                    price.isEmpty() ? "0.00" : price,
+                    quantity, // Always an integer
+                    priceUnit.isEmpty() ? "each" : priceUnit,
+                    mainListingPrice,
+                    location,
+                    hasMultipleItems != null ? hasMultipleItems : false,
+                    url,
+                    notes
+            );
+            rows.add(row);
+        }
+        
+        // Add all rows at once
+        if (!rows.isEmpty()) {
+            appendRows(MARKETPLACE_SHEET, rows);
+            log.info("Added {} new marketplace listings for URL: {}", rows.size(), url);
+        }
+    }
+    
     public void addMarketplaceListing(Map<String, Object> listing) throws IOException {
         log.info("Processing listing for Google Sheets: {}", listing.getOrDefault("itemName", listing.getOrDefault("title", "Unknown")));
         log.debug("Full listing data: {}", listing);
@@ -94,6 +174,19 @@ public class GoogleSheetsService {
                 listing.getOrDefault("itemName", listing.getOrDefault("title", "Unknown")), 
                 listing.keySet());
             return;
+        }
+        
+        // Check if URL already exists and if it needs refreshing (> 7 days old)
+        int existingRowIndex = findRowByUrl(MARKETPLACE_SHEET, url);
+        if (existingRowIndex > 0) {
+            LocalDateTime lastUpdate = getLastUpdateDate(MARKETPLACE_SHEET, existingRowIndex);
+            if (lastUpdate != null && ChronoUnit.DAYS.between(lastUpdate, LocalDateTime.now()) < 7) {
+                log.info("Skipping URL (last updated {} days ago): {}", 
+                    ChronoUnit.DAYS.between(lastUpdate, LocalDateTime.now()), url);
+                return;
+            }
+            log.info("URL found but is {} days old, refreshing: {}", 
+                lastUpdate != null ? ChronoUnit.DAYS.between(lastUpdate, LocalDateTime.now()) : "unknown", url);
         }
 
         // Ensure quantity is an integer
@@ -141,8 +234,7 @@ public class GoogleSheetsService {
                 notes
         );
         
-        // Check if URL already exists and update that row, otherwise append new row
-        int existingRowIndex = findRowByUrl(MARKETPLACE_SHEET, url);
+        // Update existing row or append new row (existingRowIndex already determined above)
         if (existingRowIndex > 0) {
             // Update existing row (but keep original date found, just update the timestamp in notes)
             List<Object> existingRow = getRow(MARKETPLACE_SHEET, existingRowIndex);
@@ -238,7 +330,7 @@ public class GoogleSheetsService {
      */
     private int findRowByUrl(String sheetName, String url) throws IOException {
         ValueRange response = sheetsService.spreadsheets().values()
-                .get(spreadsheetId, sheetName + "!I:I") // Column I is Marketplace URL (9th column)
+                .get(spreadsheetId, sheetName + "!K:K") // Column K is Marketplace URL (11th column)
                 .execute();
         
         List<List<Object>> values = response.getValues();
@@ -251,6 +343,83 @@ public class GoogleSheetsService {
             }
         }
         return -1; // Not found
+    }
+    
+    /**
+     * Find all row indices (1-based) that contain the given URL in the Marketplace URL column
+     * Returns empty list if none found
+     */
+    private List<Integer> findAllRowsByUrl(String sheetName, String url) throws IOException {
+        List<Integer> rowIndices = new ArrayList<>();
+        ValueRange response = sheetsService.spreadsheets().values()
+                .get(spreadsheetId, sheetName + "!K:K") // Column K is Marketplace URL (11th column)
+                .execute();
+        
+        List<List<Object>> values = response.getValues();
+        if (values != null) {
+            for (int i = 0; i < values.size(); i++) {
+                List<Object> row = values.get(i);
+                if (!row.isEmpty() && url.equals(row.get(0).toString())) {
+                    rowIndices.add(i + 1); // Add 1-based row index
+                }
+            }
+        }
+        return rowIndices;
+    }
+    
+    /**
+     * Delete all rows that have the specified URL
+     * Returns the number of rows deleted
+     */
+    private int deleteRowsByUrl(String sheetName, String url) throws IOException {
+        List<Integer> rowsToDelete = findAllRowsByUrl(sheetName, url);
+        
+        if (rowsToDelete.isEmpty()) {
+            return 0;
+        }
+        
+        // Sort in descending order so we delete from bottom to top (to maintain row indices)
+        Collections.sort(rowsToDelete, Collections.reverseOrder());
+        
+        log.info("Deleting {} existing rows for URL: {}", rowsToDelete.size(), url);
+        
+        // Get the sheet ID for batch delete
+        Spreadsheet spreadsheet = sheetsService.spreadsheets().get(spreadsheetId).execute();
+        Integer sheetId = null;
+        for (Sheet sheet : spreadsheet.getSheets()) {
+            if (sheet.getProperties().getTitle().equals(sheetName)) {
+                sheetId = sheet.getProperties().getSheetId();
+                break;
+            }
+        }
+        
+        if (sheetId == null) {
+            log.error("Could not find sheet ID for: {}", sheetName);
+            return 0;
+        }
+        
+        // Create batch delete requests
+        List<Request> requests = new ArrayList<>();
+        for (Integer rowIndex : rowsToDelete) {
+            // Skip header row
+            if (rowIndex <= 1) continue;
+            
+            requests.add(new Request()
+                    .setDeleteDimension(new DeleteDimensionRequest()
+                            .setRange(new DimensionRange()
+                                    .setSheetId(sheetId)
+                                    .setDimension("ROWS")
+                                    .setStartIndex(rowIndex - 1) // 0-based for API
+                                    .setEndIndex(rowIndex)))); // exclusive end
+        }
+        
+        if (!requests.isEmpty()) {
+            BatchUpdateSpreadsheetRequest batchRequest = new BatchUpdateSpreadsheetRequest()
+                    .setRequests(requests);
+            sheetsService.spreadsheets().batchUpdate(spreadsheetId, batchRequest).execute();
+        }
+        
+        return rowsToDelete.size();
     }
 
     /**
@@ -267,7 +436,112 @@ public class GoogleSheetsService {
         }
         return new ArrayList<>(); // Return empty list if row not found
     }
+    
+    /**
+     * Get the last update date from a row (column A - Date Found)
+     * Returns null if date cannot be parsed
+     */
+    private LocalDateTime getLastUpdateDate(String sheetName, int rowIndex) throws IOException {
+        List<Object> row = getRow(sheetName, rowIndex);
+        if (row.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            String dateStr = row.get(0).toString();
+            return LocalDateTime.parse(dateStr, DATE_FORMATTER);
+        } catch (Exception e) {
+            log.warn("Could not parse date from row {}: {}", rowIndex, row.get(0));
+            return null;
+        }
+    }
+    
+    /**
+     * Check if a URL should be refreshed based on 7-day rule
+     * Returns true if URL doesn't exist or was last updated more than 7 days ago
+     */
+    public boolean shouldRefreshUrl(String url) throws IOException {
+        int existingRowIndex = findRowByUrl(MARKETPLACE_SHEET, url);
+        if (existingRowIndex <= 0) {
+            return true; // URL doesn't exist, should scrape
+        }
+        
+        LocalDateTime lastUpdate = getLastUpdateDate(MARKETPLACE_SHEET, existingRowIndex);
+        if (lastUpdate == null) {
+            return true; // Can't determine last update, refresh to be safe
+        }
+        
+        long daysSinceUpdate = ChronoUnit.DAYS.between(lastUpdate, LocalDateTime.now());
+        return daysSinceUpdate >= 7;
+    }
 
+    /**
+     * Fetch all marketplace listings from Google Sheets
+     * Returns a list of maps containing all listing data
+     */
+    public List<Map<String, Object>> getAllMarketplaceListings() throws IOException {
+        List<Map<String, Object>> listings = new ArrayList<>();
+        
+        if (spreadsheetId == null || spreadsheetId.isEmpty()) {
+            log.warn("No spreadsheet ID configured, returning empty listings");
+            return listings;
+        }
+        
+        try {
+            // Fetch all data from the marketplace sheet
+            String range = MARKETPLACE_SHEET + "!A:L"; // Columns A through L (all columns)
+            log.info("Fetching data from range: {}", range);
+            
+            ValueRange response = sheetsService.spreadsheets().values()
+                    .get(spreadsheetId, range)
+                    .execute();
+            
+            List<List<Object>> values = response.getValues();
+            log.info("Retrieved {} rows from Google Sheets", values != null ? values.size() : 0);
+            
+            if (values == null || values.size() <= 1) {
+                log.info("No data found or only headers present");
+                return listings; // Return empty if no data or only headers
+            }
+        
+            // Skip header row and process data
+            for (int i = 1; i < values.size(); i++) {
+                List<Object> row = values.get(i);
+                if (row.isEmpty()) continue;
+                
+                Map<String, Object> listing = new HashMap<>();
+                
+                // Map columns to fields (matching the header structure)
+                listing.put("dateFound", row.size() > 0 ? row.get(0) : "");
+                listing.put("itemName", row.size() > 1 ? row.get(1) : "");
+                listing.put("set", row.size() > 2 ? row.get(2) : "");
+                listing.put("productType", row.size() > 3 ? row.get(3) : "");
+                listing.put("price", row.size() > 4 ? row.get(4) : "");
+                listing.put("quantity", row.size() > 5 ? row.get(5) : "");
+                listing.put("priceUnit", row.size() > 6 ? row.get(6) : "");
+                listing.put("mainListingPrice", row.size() > 7 ? row.get(7) : "");
+                listing.put("location", row.size() > 8 ? row.get(8) : "");
+                listing.put("hasMultipleItems", row.size() > 9 ? row.get(9) : false);
+                listing.put("marketplaceUrl", row.size() > 10 ? row.get(10) : "");
+                listing.put("notes", row.size() > 11 ? row.get(11) : "");
+                
+                // Add computed fields for UI
+                listing.put("id", "item_" + i); // Generate unique ID
+                listing.put("source", "Facebook Marketplace");
+                listing.put("available", true); // Can be computed based on business logic
+                
+                listings.add(listing);
+            }
+        
+            log.info("Fetched {} marketplace listings from Google Sheets", listings.size());
+            return listings;
+            
+        } catch (IOException e) {
+            log.error("Error fetching marketplace listings from Google Sheets: {}", e.getMessage(), e);
+            throw e;
+        }
+    }
+    
     public String getSpreadsheetUrl() {
         return String.format("https://docs.google.com/spreadsheets/d/%s/edit", spreadsheetId);
     }

@@ -22,73 +22,81 @@ interface MarketplaceListing {
   itemName: string
   set: string
   productType: string
-  condition: string
-  price: number
-  pricePerPack?: number
-  seller: string
-  dateFound: string
+  price: string | number
+  quantity: string | number
+  priceUnit: string
+  mainListingPrice: string
+  location: string
+  hasMultipleItems: boolean | string
   marketplaceUrl: string
-  status: string
-  description?: string
+  notes: string
+  dateFound: string
+  source: string
+  available: boolean
 }
 
 export default function MarketplacePage() {
-  const [listings, setListings] = useState<MarketplaceListing[]>([])
+  const [allListings, setAllListings] = useState<MarketplaceListing[]>([])
+  const [availableListings, setAvailableListings] = useState<MarketplaceListing[]>([])
   const [loading, setLoading] = useState(false)
   const [monitoring, setMonitoring] = useState(false)
+  const [lastUpdate, setLastUpdate] = useState<number>(0)
 
-  // Generate some sample data
-  useEffect(() => {
-    const sampleListings: MarketplaceListing[] = [
-      {
-        id: "1",
-        itemName: "Pokemon Stellar Crown Booster Box",
-        set: "Stellar Crown",
-        productType: "Booster Box",
-        condition: "New",
-        price: 165.00,
-        pricePerPack: 4.58,
-        seller: "CardCollector123",
-        dateFound: "2025-01-30T10:30:00Z",
-        marketplaceUrl: "https://facebook.com/marketplace/item/123",
-        status: "Available",
-        description: "Brand new sealed booster box"
-      },
-      {
-        id: "2",
-        itemName: "Pokemon Paradox Rift Elite Trainer Box",
-        set: "Paradox Rift",
-        productType: "Elite Trainer Box",
-        condition: "New",
-        price: 55.00,
-        seller: "PokemonMaster",
-        dateFound: "2025-01-30T09:15:00Z",
-        marketplaceUrl: "https://facebook.com/marketplace/item/456",
-        status: "Available"
-      },
-      {
-        id: "3",
-        itemName: "Pokemon 151 Booster Bundle",
-        set: "Pokemon 151",
-        productType: "Bundle",
-        condition: "Like New",
-        price: 89.99,
-        seller: "TCG_Deals",
-        dateFound: "2025-01-30T08:45:00Z",
-        marketplaceUrl: "https://facebook.com/marketplace/item/789",
-        status: "Sold"
+  // Fetch listings from API
+  const fetchListings = async () => {
+    try {
+      setLoading(true)
+      console.log('Attempting to fetch listings from API...')
+      
+      const response = await fetch('http://localhost:8080/api/marketplace/listings')
+      console.log('API Response status:', response.status)
+      
+      if (response.ok) {
+        const data = await response.json()
+        console.log('Raw API response data:', data)
+        
+        const allListings = data.allListings || []
+        const availableListings = data.availableListings || []
+        
+        console.log('All listings count:', allListings.length)
+        console.log('Available listings count:', availableListings.length)
+        
+        setAllListings(allListings)
+        setAvailableListings(availableListings)
+        setLastUpdate(data.lastUpdate || Date.now())
+        
+        if (allListings.length === 0) {
+          console.warn('No listings found in API response')
+        }
+      } else {
+        const errorText = await response.text()
+        console.error('Failed to fetch listings:', response.status, errorText)
       }
-    ]
-    setListings(sampleListings)
+    } catch (error) {
+      console.error('Error fetching listings:', error)
+      console.error('Is the backend server running on port 8080?')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Fetch listings on component mount and set up auto-refresh
+  useEffect(() => {
+    fetchListings()
+    
+    // Set up 15-minute auto-refresh (15 * 60 * 1000 = 900000ms)
+    const refreshInterval = setInterval(fetchListings, 15 * 60 * 1000)
+    
+    // Cleanup interval on component unmount
+    return () => clearInterval(refreshInterval)
   }, [])
 
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'available': return 'default'
-      case 'sold': return 'secondary'
-      case 'pending': return 'outline'
-      default: return 'secondary'
-    }
+  const getStatusColor = (available: boolean) => {
+    return available ? 'default' : 'secondary'
+  }
+  
+  const getStatusText = (available: boolean) => {
+    return available ? 'Available' : 'Unavailable'
   }
 
   const getProductTypeIcon = (type: string) => {
@@ -118,6 +126,10 @@ export default function MarketplacePage() {
         setMonitoring(true)
         alert('Marketplace monitoring started successfully!')
         console.log('Marketplace monitoring started successfully')
+        // Refresh listings after a short delay to get updated data
+        setTimeout(() => {
+          fetchListings()
+        }, 2000)
       } else {
         alert(`Failed to start marketplace monitoring: ${data.error || 'Unknown error'}`)
         console.error('Failed to start marketplace monitoring:', data)
@@ -158,9 +170,9 @@ export default function MarketplacePage() {
             </p>
           </div>
           <div className="flex space-x-2">
-            <Button variant="outline">
-              <Filter className="h-4 w-4 mr-2" />
-              Filter
+            <Button variant="outline" onClick={fetchListings} disabled={loading}>
+              <Search className="h-4 w-4 mr-2" />
+              {loading ? 'Refreshing...' : 'Refresh'}
             </Button>
             <Button 
               onClick={startMarketplaceMonitoring}
@@ -180,9 +192,9 @@ export default function MarketplacePage() {
               <Package className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{listings.length}</div>
+              <div className="text-2xl font-bold">{allListings.length}</div>
               <p className="text-xs text-muted-foreground">
-                +2 from last hour
+                Total items found
               </p>
             </CardContent>
           </Card>
@@ -194,7 +206,7 @@ export default function MarketplacePage() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-green-600">
-                {listings.filter(l => l.status === 'Available').length}
+                {availableListings.length}
               </div>
               <p className="text-xs text-muted-foreground">
                 Ready to purchase
@@ -209,7 +221,10 @@ export default function MarketplacePage() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                ${(listings.reduce((sum, l) => sum + l.price, 0) / listings.length || 0).toFixed(0)}
+                ${allListings.length > 0 ? (allListings.reduce((sum, l) => {
+                  const price = typeof l.price === 'string' ? parseFloat(l.price) || 0 : l.price || 0
+                  return sum + price
+                }, 0) / allListings.length).toFixed(0) : '0'}
               </div>
               <p className="text-xs text-muted-foreground">
                 Across all listings
@@ -223,7 +238,9 @@ export default function MarketplacePage() {
               <Calendar className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">5min</div>
+              <div className="text-2xl font-bold">
+                {lastUpdate ? Math.floor((Date.now() - lastUpdate) / 60000) : 0}min
+              </div>
               <p className="text-xs text-muted-foreground">
                 ago
               </p>
@@ -241,7 +258,22 @@ export default function MarketplacePage() {
 
           <TabsContent value="all" className="space-y-4">
             <div className="grid gap-4">
-              {listings.map((listing) => (
+              {allListings.length === 0 && !loading ? (
+                <Card>
+                  <CardContent className="p-6 text-center">
+                    <div className="text-muted-foreground">
+                      <Package className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                      <h3 className="text-lg font-semibold mb-2">No listings found</h3>
+                      <p className="mb-4">No marketplace listings are currently available.</p>
+                      <Button onClick={fetchListings} variant="outline">
+                        <Search className="h-4 w-4 mr-2" />
+                        Refresh Listings
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                allListings.map((listing) => (
                 <Card key={listing.id}>
                   <CardContent className="p-6">
                     <div className="flex items-start justify-between">
@@ -249,36 +281,35 @@ export default function MarketplacePage() {
                         <div className="flex items-center space-x-2 mb-2">
                           {getProductTypeIcon(listing.productType)}
                           <h3 className="text-lg font-semibold">{listing.itemName}</h3>
-                          <Badge variant={getStatusColor(listing.status)}>
-                            {listing.status}
+                          <Badge variant={getStatusColor(listing.available)}>
+                            {getStatusText(listing.available)}
                           </Badge>
                         </div>
                         
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
                           <div>
-                            <span className="font-medium">Set:</span> {listing.set}
+                            <span className="font-medium">Set:</span> {listing.set || 'Unknown'}
                           </div>
                           <div>
-                            <span className="font-medium">Type:</span> {listing.productType}
+                            <span className="font-medium">Type:</span> {listing.productType || 'Unknown'}
                           </div>
                           <div>
-                            <span className="font-medium">Condition:</span> {listing.condition}
+                            <span className="font-medium">Quantity:</span> {listing.quantity} {listing.priceUnit}
                           </div>
-                          <div className="flex items-center">
-                            <User className="h-3 w-3 mr-1" />
-                            {listing.seller}
+                          <div>
+                            <span className="font-medium">Location:</span> {listing.location || 'Unknown'}
                           </div>
                         </div>
 
-                        {listing.description && (
+                        {listing.notes && (
                           <p className="text-sm text-muted-foreground mt-2">
-                            {listing.description}
+                            {listing.notes}
                           </p>
                         )}
 
                         <div className="flex items-center justify-between mt-4">
                           <div className="text-xs text-muted-foreground">
-                            Found: {new Date(listing.dateFound).toLocaleString()}
+                            Found: {listing.dateFound ? new Date(listing.dateFound).toLocaleString() : 'Unknown'}
                           </div>
                           <Button
                             variant="outline"
@@ -293,44 +324,70 @@ export default function MarketplacePage() {
 
                       <div className="text-right ml-6">
                         <div className="text-2xl font-bold text-green-600">
-                          ${listing.price}
+                          ${typeof listing.price === 'string' ? listing.price : listing.price?.toFixed(2) || '0.00'}
                         </div>
-                        {listing.pricePerPack && (
+                        {listing.mainListingPrice && (
                           <div className="text-sm text-muted-foreground">
-                            ${listing.pricePerPack.toFixed(2)}/pack
+                            Main: ${listing.mainListingPrice}
                           </div>
                         )}
                       </div>
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+                ))
+              )}
             </div>
           </TabsContent>
 
           <TabsContent value="available">
             <div className="grid gap-4">
-              {listings
-                .filter(listing => listing.status === 'Available')
-                .map((listing) => (
-                  <Card key={listing.id}>
-                    <CardContent className="p-6">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h3 className="text-lg font-semibold">{listing.itemName}</h3>
-                          <p className="text-muted-foreground">{listing.set} • {listing.seller}</p>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-xl font-bold text-green-600">${listing.price}</div>
-                          <Button size="sm" className="mt-2">
-                            <ExternalLink className="h-3 w-3 mr-1" />
-                            View
-                          </Button>
+              {availableListings.length === 0 && !loading ? (
+                <Card>
+                  <CardContent className="p-6 text-center">
+                    <div className="text-muted-foreground">
+                      <TrendingUp className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                      <h3 className="text-lg font-semibold mb-2">No available listings</h3>
+                      <p className="mb-4">No available marketplace listings found.</p>
+                      <Button onClick={fetchListings} variant="outline">
+                        <Search className="h-4 w-4 mr-2" />
+                        Refresh Listings
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                availableListings.map((listing) => (
+                <Card key={listing.id}>
+                  <CardContent className="p-6">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold">{listing.itemName}</h3>
+                        <p className="text-muted-foreground">
+                          {listing.set || 'Unknown Set'} • {listing.location || 'Unknown Location'}
+                        </p>
+                        <div className="text-sm text-muted-foreground mt-1">
+                          Quantity: {listing.quantity} {listing.priceUnit}
                         </div>
                       </div>
-                    </CardContent>
-                  </Card>
-                ))}
+                      <div className="text-right">
+                        <div className="text-xl font-bold text-green-600">
+                          ${typeof listing.price === 'string' ? listing.price : listing.price?.toFixed(2) || '0.00'}
+                        </div>
+                        <Button 
+                          size="sm" 
+                          className="mt-2"
+                          onClick={() => window.open(listing.marketplaceUrl, '_blank')}
+                        >
+                          <ExternalLink className="h-3 w-3 mr-1" />
+                          View
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                ))
+              )}
             </div>
           </TabsContent>
         </Tabs>

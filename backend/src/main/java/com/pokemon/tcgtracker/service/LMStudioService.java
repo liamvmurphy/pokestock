@@ -247,7 +247,7 @@ public class LMStudioService {
                     String.class
             );
 
-            log.debug("Raw LM Studio response: {}", rawResponse.getBody());
+            // Raw response logging removed to reduce log verbosity
 
             // Now parse it
             LMStudioResponse response = objectMapper.readValue(rawResponse.getBody(), LMStudioResponse.class);

@@ -2,7 +2,7 @@ package com.pokemon.tcgtracker.controller;
 
 import com.pokemon.tcgtracker.service.ConfigurationService;
 import com.pokemon.tcgtracker.service.FacebookMarketplaceService;
-import com.pokemon.tcgtracker.service.MarketplaceScrapingService;
+import com.pokemon.tcgtracker.service.GoogleSheetsService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -21,7 +21,7 @@ import java.util.concurrent.CompletableFuture;
 public class MarketplaceController {
 
     private final FacebookMarketplaceService facebookMarketplaceService;
-    private final MarketplaceScrapingService marketplaceScrapingService;
+    private final GoogleSheetsService googleSheetsService;
     private final ConfigurationService configurationService;
 
     @GetMapping("/status")
@@ -112,7 +112,7 @@ public class MarketplaceController {
             log.info("Starting scalable marketplace scraping for: {} (max {} items)", searchTerm, maxItems);
             
             // Run scraping synchronously for now (can be made async later)
-            List<Map<String, Object>> results = marketplaceScrapingService.scrapeMarketplaceItems(searchTerm, maxItems);
+            List<Map<String, Object>> results = facebookMarketplaceService.scrapeMarketplaceItems(searchTerm, maxItems);
             
             Map<String, Object> response = new HashMap<>();
             response.put("message", "Scraping completed");
@@ -201,6 +201,49 @@ public class MarketplaceController {
             log.error("Failed to get marketplace history", e);
             Map<String, Object> error = new HashMap<>();
             error.put("error", e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+    
+    @GetMapping("/listings")
+    public ResponseEntity<Map<String, Object>> getListings() {
+        try {
+            // Fetch all listings from Google Sheets
+            List<Map<String, Object>> allListings = googleSheetsService.getAllMarketplaceListings();
+            
+            // Separate into available and all listings
+            List<Map<String, Object>> availableListings = allListings.stream()
+                    .filter(listing -> {
+                        // Filter for available items (you can customize this logic)
+                        Object quantity = listing.get("quantity");
+                        if (quantity instanceof String) {
+                            try {
+                                return Integer.parseInt((String) quantity) > 0;
+                            } catch (NumberFormatException e) {
+                                return false;
+                            }
+                        } else if (quantity instanceof Number) {
+                            return ((Number) quantity).intValue() > 0;
+                        }
+                        return false;
+                    })
+                    .collect(java.util.stream.Collectors.toList());
+            
+            Map<String, Object> response = new HashMap<>();
+            response.put("availableListings", availableListings);
+            response.put("allListings", allListings);
+            response.put("totalCount", allListings.size());
+            response.put("availableCount", availableListings.size());
+            response.put("lastUpdate", System.currentTimeMillis());
+            response.put("spreadsheetUrl", googleSheetsService.getSpreadsheetUrl());
+            
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            log.error("Failed to get marketplace listings", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            error.put("message", "Failed to fetch listings from Google Sheets");
             return ResponseEntity.internalServerError().body(error);
         }
     }

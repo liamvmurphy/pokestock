@@ -51,7 +51,9 @@
       "Bash(/Users/lmurphy/development/pokestock/backend/gradlew compileJava)",
       "Bash(/Users/lmurphy/development/pokestock/backend/gradlew test --tests TestController)",
       "Bash(/Users/lmurphy/development/pokestock/backend/gradlew build -x test)",
-      "Bash(/usr/bin/java:*)"
+      "Bash(/usr/bin/java:*)",
+      "Bash(source:*)",
+      "Bash(sdk install:*)"
     ],
     "deny": []
   }
