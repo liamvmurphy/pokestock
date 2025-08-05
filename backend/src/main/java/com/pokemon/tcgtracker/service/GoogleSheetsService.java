@@ -545,4 +545,173 @@ public class GoogleSheetsService {
     public String getSpreadsheetUrl() {
         return String.format("https://docs.google.com/spreadsheets/d/%s/edit", spreadsheetId);
     }
+    
+    /**
+     * Save market intelligence report as a new sheet tab
+     */
+    public String saveMarketIntelligenceReport(String reportContent, int totalListings) {
+        if (spreadsheetId == null || spreadsheetId.isEmpty()) {
+            log.warn("No spreadsheet ID configured for saving market intelligence report");
+            return null;
+        }
+        
+        try {
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+            String sheetName = String.format("Market_Report_%s_%d_listings", timestamp, totalListings);
+            
+            log.info("Saving market intelligence report as sheet: {}", sheetName);
+            
+            // Create new sheet
+            createNewSheet(sheetName);
+            
+            // Convert markdown report to rows for Google Sheets
+            List<List<Object>> rows = convertMarkdownToSheetRows(reportContent, totalListings);
+            
+            // Write the report data to the sheet
+            ValueRange body = new ValueRange()
+                .setValues(rows);
+            
+            sheetsService.spreadsheets().values()
+                .update(spreadsheetId, sheetName + "!A1", body)
+                .setValueInputOption("RAW")
+                .execute();
+            
+            log.info("Successfully saved market intelligence report to sheet: {}", sheetName);
+            return sheetName;
+            
+        } catch (IOException e) {
+            log.error("Failed to save market intelligence report to Google Sheets: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+    
+    /**
+     * Get the most recent market intelligence report from Google Sheets
+     */
+    public Map<String, Object> getLatestMarketIntelligenceReport() {
+        if (spreadsheetId == null || spreadsheetId.isEmpty()) {
+            log.warn("No spreadsheet ID configured for retrieving market intelligence report");
+            return null;
+        }
+        
+        try {
+            // Get all sheets in the spreadsheet
+            Spreadsheet spreadsheet = sheetsService.spreadsheets().get(spreadsheetId).execute();
+            List<Sheet> sheets = spreadsheet.getSheets();
+            
+            // Find all market report sheets and get the most recent one
+            Sheet latestReportSheet = null;
+            LocalDateTime latestDate = null;
+            
+            for (Sheet sheet : sheets) {
+                String sheetName = sheet.getProperties().getTitle();
+                if (sheetName.startsWith("Market_Report_")) {
+                    try {
+                        // Extract date from sheet name: Market_Report_2025-08-05_14-30-25_15_listings
+                        String dateTimeStr = sheetName.substring("Market_Report_".length());
+                        dateTimeStr = dateTimeStr.substring(0, dateTimeStr.indexOf("_", dateTimeStr.indexOf("_") + 1));
+                        
+                        LocalDateTime sheetDate = LocalDateTime.parse(dateTimeStr, DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+                        
+                        if (latestDate == null || sheetDate.isAfter(latestDate)) {
+                            latestDate = sheetDate;
+                            latestReportSheet = sheet;
+                        }
+                    } catch (Exception e) {
+                        log.debug("Could not parse date from sheet name: {}", sheetName);
+                    }
+                }
+            }
+            
+            if (latestReportSheet == null) {
+                log.info("No market intelligence report sheets found");
+                return null;
+            }
+            
+            String sheetName = latestReportSheet.getProperties().getTitle();
+            log.info("Found latest market intelligence report sheet: {}", sheetName);
+            
+            // Read the content from the sheet
+            ValueRange response = sheetsService.spreadsheets().values()
+                .get(spreadsheetId, sheetName + "!A:B")
+                .execute();
+            
+            List<List<Object>> values = response.getValues();
+            if (values == null || values.isEmpty()) {
+                log.warn("Market intelligence report sheet is empty: {}", sheetName);
+                return null;
+            }
+            
+            // Convert sheet rows back to markdown
+            String reportContent = convertSheetRowsToMarkdown(values);
+            
+            Map<String, Object> reportData = new HashMap<>();
+            reportData.put("sheetName", sheetName);
+            reportData.put("content", reportContent);
+            reportData.put("createdTime", latestDate.format(DATE_FORMATTER));
+            reportData.put("spreadsheetUrl", getSpreadsheetUrl() + "#gid=" + latestReportSheet.getProperties().getSheetId());
+            
+            log.info("Successfully retrieved market intelligence report from sheet: {}", sheetName);
+            return reportData;
+            
+        } catch (IOException e) {
+            log.error("Failed to retrieve latest market intelligence report from Google Sheets: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+    
+    /**
+     * Create a new sheet with the given name
+     */
+    private void createNewSheet(String sheetName) throws IOException {
+        AddSheetRequest addSheetRequest = new AddSheetRequest()
+            .setProperties(new SheetProperties()
+                .setTitle(sheetName)
+                .setGridProperties(new GridProperties()
+                    .setRowCount(1000)
+                    .setColumnCount(2)));
+        
+        BatchUpdateSpreadsheetRequest batchUpdateRequest = new BatchUpdateSpreadsheetRequest()
+            .setRequests(Arrays.asList(new Request().setAddSheet(addSheetRequest)));
+        
+        sheetsService.spreadsheets().batchUpdate(spreadsheetId, batchUpdateRequest).execute();
+        log.debug("Created new sheet: {}", sheetName);
+    }
+    
+    /**
+     * Convert markdown report to Google Sheets rows - store complete markdown content
+     */
+    private List<List<Object>> convertMarkdownToSheetRows(String reportContent, int totalListings) {
+        List<List<Object>> rows = new ArrayList<>();
+        
+        // Add header information
+        rows.add(Arrays.asList("Report Type", "Pokemon TCG Market Intelligence"));
+        rows.add(Arrays.asList("Generated", LocalDateTime.now().format(DATE_FORMATTER)));
+        rows.add(Arrays.asList("Total Listings Analyzed", totalListings));
+        rows.add(Arrays.asList("", "")); // Empty row
+        
+        // Store the complete markdown content in a single cell to preserve formatting
+        rows.add(Arrays.asList("MARKDOWN_CONTENT", reportContent));
+        
+        return rows;
+    }
+    
+    /**
+     * Convert Google Sheets rows back to markdown
+     */
+    private String convertSheetRowsToMarkdown(List<List<Object>> values) {
+        // Look for the MARKDOWN_CONTENT cell which contains the complete formatted report
+        for (List<Object> row : values) {
+            if (row.size() >= 2) {
+                String type = row.get(0).toString();
+                if ("MARKDOWN_CONTENT".equals(type)) {
+                    return row.get(1).toString();
+                }
+            }
+        }
+        
+        // Fallback: if no MARKDOWN_CONTENT found, return empty string
+        log.warn("No MARKDOWN_CONTENT found in Google Sheets, report formatting may be lost");
+        return "";
+    }
 }

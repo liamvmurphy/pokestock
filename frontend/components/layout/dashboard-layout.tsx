@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { NetworkInfo } from "@/components/ui/network-info"
 import {
   ShoppingCart,
   Store,
@@ -14,7 +15,8 @@ import {
   Activity,
   Zap,
   Menu,
-  X
+  X,
+  FileText
 } from "lucide-react"
 
 const navigation = [
@@ -27,6 +29,11 @@ const navigation = [
     name: "Marketplace",
     href: "/marketplace",
     icon: ShoppingCart,
+  },
+  {
+    name: "CSV Analysis",
+    href: "/csv-analysis",
+    icon: FileText,
   },
   {
     name: "Store Monitoring",
@@ -153,6 +160,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
         {/* Page content */}
         <main className="bg-background min-h-screen">
+          <div className="p-4 lg:p-6">
+            <NetworkInfo />
+          </div>
           {children}
         </main>
       </div>

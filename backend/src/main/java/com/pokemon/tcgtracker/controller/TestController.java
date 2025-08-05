@@ -1,10 +1,12 @@
 package com.pokemon.tcgtracker.controller;
 
+import com.pokemon.tcgtracker.service.ClaudeAPIService;
 import com.pokemon.tcgtracker.service.ConfigurationService;
 import com.pokemon.tcgtracker.service.GoogleSheetsService;
 import com.pokemon.tcgtracker.service.LMStudioService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.http.ResponseEntity;
 import org.springframework.context.ApplicationContext;
@@ -26,7 +28,11 @@ public class TestController {
 
     private final LMStudioService lmStudioService;
     private final GoogleSheetsService googleSheetsService;
+    private final ClaudeAPIService claudeAPIService;
     private final ApplicationContext applicationContext;
+    
+    @Value("${anthropic.api.key:}")
+    private String apiKey;
 
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
@@ -35,6 +41,40 @@ public class TestController {
         status.put("googleSheets", googleSheetsService.getSpreadsheetUrl());
         status.put("lmStudio", lmStudioService.testConnection());
         return ResponseEntity.ok(status);
+    }
+    
+    @GetMapping("/env-check")
+    public ResponseEntity<Map<String, Object>> checkEnvironment() {
+        Map<String, Object> result = new HashMap<>();
+        
+        result.put("apiKeyPresent", apiKey != null && !apiKey.isEmpty());
+        result.put("apiKeyLength", apiKey != null ? apiKey.length() : 0);
+        result.put("apiKeyFormat", apiKey != null && apiKey.startsWith("sk-ant"));
+        result.put("envVar", System.getenv("ANTHROPIC_API_KEY") != null ? "present" : "missing");
+        result.put("envVarLength", System.getenv("ANTHROPIC_API_KEY") != null ? System.getenv("ANTHROPIC_API_KEY").length() : 0);
+        
+        // First 10 chars for debugging (safe to show)
+        if (apiKey != null && apiKey.length() > 10) {
+            result.put("apiKeyPrefix", apiKey.substring(0, 10) + "...");
+        }
+        
+        return ResponseEntity.ok(result);
+    }
+    
+    @GetMapping("/claude-test")
+    public ResponseEntity<Map<String, Object>> testClaude() {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            String testResult = claudeAPIService.testClaudeAPI();
+            result.put("success", true);
+            result.put("response", testResult);
+        } catch (Exception e) {
+            result.put("success", false);
+            result.put("error", e.getMessage());
+        }
+        
+        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/models")

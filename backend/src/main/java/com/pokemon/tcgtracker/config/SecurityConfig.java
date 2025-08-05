@@ -25,6 +25,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/test/**").permitAll()  // Allow test endpoints without auth
                 .requestMatchers("/api/marketplace/**").permitAll()  // Allow marketplace endpoints without auth
+                .requestMatchers("/api/csv/**").permitAll()  // Allow CSV analysis endpoints without auth
                 .anyRequest().authenticated()
             )
             .httpBasic();

@@ -19,6 +19,7 @@ import {
   Target,
   Activity
 } from "lucide-react"
+import { apiEndpoints } from "@/lib/api"
 
 interface MarketplaceListing {
   id: string
@@ -51,7 +52,7 @@ export default function MarketplacePage() {
       setLoading(true)
       console.log('Attempting to fetch listings from API...')
       
-      const response = await fetch('http://localhost:8080/api/marketplace/listings')
+      const response = await fetch(apiEndpoints.marketplace.listings)
       console.log('API Response status:', response.status)
       
       if (response.ok) {
@@ -124,7 +125,7 @@ export default function MarketplacePage() {
     setLoading(true)
     try {
       console.log('Starting marketplace monitoring...')
-      const response = await fetch('http://localhost:8080/api/marketplace/start', {
+      const response = await fetch(apiEndpoints.marketplace.start, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -157,7 +158,7 @@ export default function MarketplacePage() {
 
   const checkMonitoringStatus = async () => {
     try {
-      const response = await fetch('http://localhost:8080/api/marketplace/status')
+      const response = await fetch(apiEndpoints.marketplace.status)
       if (response.ok) {
         const data = await response.json()
         setMonitoring(data.running || false)
@@ -197,6 +198,13 @@ export default function MarketplacePage() {
             >
               <Activity className="h-4 w-4 mr-2" />
               {loading ? 'Refreshing...' : 'Refresh Data'}
+            </Button>
+            <Button 
+              variant="outline"
+              onClick={() => window.open('/csv-analysis', '_blank')}
+            >
+              <Package className="h-4 w-4 mr-2" />
+              Analyze CSV
             </Button>
             <Button 
               onClick={startMarketplaceMonitoring}
