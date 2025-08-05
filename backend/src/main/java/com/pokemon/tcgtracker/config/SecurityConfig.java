@@ -26,6 +26,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/test/**").permitAll()  // Allow test endpoints without auth
                 .requestMatchers("/api/marketplace/**").permitAll()  // Allow marketplace endpoints without auth
                 .requestMatchers("/api/csv/**").permitAll()  // Allow CSV analysis endpoints without auth
+                .requestMatchers("/api/ebay-price/**").permitAll()  // Allow eBay price endpoints without auth
                 .anyRequest().authenticated()
             )
             .httpBasic();

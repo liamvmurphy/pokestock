@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -70,7 +71,7 @@ public class GoogleSheetsService {
         // Initialize Facebook Marketplace headers - simplified
         List<Object> marketplaceHeaders = Arrays.asList(
                 "Date Found", "Item Name", "Set", "Product Type", 
-                "Price", "Quantity", "Price Unit",
+                "Price", "Quantity", "Price Unit", "Language",
                 "Main Listing Price", "Location",
                 "Has Multiple Items", "Marketplace URL", "Notes"
         );
@@ -148,6 +149,7 @@ public class GoogleSheetsService {
                     price.isEmpty() ? "0.00" : price,
                     quantity, // Always an integer
                     priceUnit.isEmpty() ? "each" : priceUnit,
+                    listing.getOrDefault("language", "English").toString(),
                     mainListingPrice,
                     location,
                     hasMultipleItems != null ? hasMultipleItems : false,
@@ -227,6 +229,7 @@ public class GoogleSheetsService {
                 price.isEmpty() ? "0.00" : price,
                 quantity, // Always an integer
                 priceUnit.isEmpty() ? "each" : priceUnit,
+                listing.getOrDefault("language", "English").toString(),
                 mainListingPrice,
                 location,
                 hasMultipleItems != null ? hasMultipleItems : false,
@@ -246,6 +249,7 @@ public class GoogleSheetsService {
                     price.isEmpty() ? "0.00" : price,
                     quantity, // Use the processed integer quantity
                     priceUnit.isEmpty() ? "each" : priceUnit,
+                    listing.getOrDefault("language", "English").toString(),
                     mainListingPrice,
                     location,
                     hasMultipleItems != null ? hasMultipleItems : false,
@@ -489,7 +493,7 @@ public class GoogleSheetsService {
         
         try {
             // Fetch all data from the marketplace sheet
-            String range = MARKETPLACE_SHEET + "!A:L"; // Columns A through L (all columns)
+            String range = MARKETPLACE_SHEET + "!A:M"; // Columns A through M (all columns including Language)
             log.info("Fetching data from range: {}", range);
             
             ValueRange response = sheetsService.spreadsheets().values()
@@ -519,11 +523,12 @@ public class GoogleSheetsService {
                 listing.put("price", row.size() > 4 ? row.get(4) : "");
                 listing.put("quantity", row.size() > 5 ? row.get(5) : "");
                 listing.put("priceUnit", row.size() > 6 ? row.get(6) : "");
-                listing.put("mainListingPrice", row.size() > 7 ? row.get(7) : "");
-                listing.put("location", row.size() > 8 ? row.get(8) : "");
-                listing.put("hasMultipleItems", row.size() > 9 ? row.get(9) : false);
-                listing.put("marketplaceUrl", row.size() > 10 ? row.get(10) : "");
-                listing.put("notes", row.size() > 11 ? row.get(11) : "");
+                listing.put("language", row.size() > 7 ? row.get(7) : "English");
+                listing.put("mainListingPrice", row.size() > 8 ? row.get(8) : "");
+                listing.put("location", row.size() > 9 ? row.get(9) : "");
+                listing.put("hasMultipleItems", row.size() > 10 ? row.get(10) : false);
+                listing.put("marketplaceUrl", row.size() > 11 ? row.get(11) : "");
+                listing.put("notes", row.size() > 12 ? row.get(12) : "");
                 
                 // Add computed fields for UI
                 listing.put("id", "item_" + i); // Generate unique ID
@@ -657,6 +662,180 @@ public class GoogleSheetsService {
         } catch (IOException e) {
             log.error("Failed to retrieve latest market intelligence report from Google Sheets: {}", e.getMessage(), e);
             return null;
+        }
+    }
+    
+    /**
+     * Save eBay price data to a new sheet tab
+     */
+    public String saveEbayPriceData(List<Map<String, Object>> searchResults) throws IOException {
+        if (spreadsheetId == null || spreadsheetId.isEmpty()) {
+            log.error("No spreadsheet ID configured");
+            throw new IllegalStateException("Google Sheets not configured");
+        }
+        
+        try {
+            // Create a timestamp for the sheet name
+            String timestamp = LocalDateTime.now().format(DATE_FORMATTER);
+            String sheetName = String.format("eBay_Prices_%s", timestamp);
+            
+            log.info("Creating new eBay price sheet: {}", sheetName);
+            
+            // Create the new sheet
+            createNewSheet(sheetName);
+            
+            // Prepare the data to write
+            List<List<Object>> rows = new ArrayList<>();
+            
+            // Add headers
+            rows.add(Arrays.asList(
+                "Search Name",
+                "Original Name",
+                "Language",
+                "Set",
+                "Product Type",
+                "Facebook Price",
+                "eBay Lowest",
+                "eBay Highest",
+                "eBay Average",
+                "eBay Median",
+                "Result Count",
+                "All Prices",
+                "Listing Details",
+                "Search Time"
+            ));
+            
+            // Add data rows
+            for (Map<String, Object> result : searchResults) {
+                List<Object> row = new ArrayList<>();
+                row.add(result.getOrDefault("searchName", ""));
+                row.add(result.getOrDefault("originalName", ""));
+                row.add(result.getOrDefault("language", "English"));
+                row.add(result.getOrDefault("set", ""));
+                row.add(result.getOrDefault("productType", ""));
+                row.add(result.getOrDefault("facebookPrice", ""));
+                row.add(result.getOrDefault("lowestPrice", ""));
+                row.add(result.getOrDefault("highestPrice", ""));
+                row.add(result.getOrDefault("averagePrice", ""));
+                row.add(result.getOrDefault("medianPrice", ""));
+                row.add(result.getOrDefault("resultCount", "0"));
+                
+                // Convert price list to string
+                List<Double> prices = (List<Double>) result.get("ebayPrices");
+                String pricesStr = prices != null ? prices.stream()
+                    .map(String::valueOf)
+                    .collect(Collectors.joining(", ")) : "";
+                row.add(pricesStr);
+                
+                // Convert listing details to string (markdown links)
+                List<String> listingDetails = (List<String>) result.get("listingDetails");
+                String listingDetailsStr = listingDetails != null ? String.join("\n", listingDetails) : "";
+                row.add(listingDetailsStr);
+                
+                row.add(timestamp);
+                rows.add(row);
+            }
+            
+            // Write the data
+            ValueRange body = new ValueRange().setValues(rows);
+            UpdateValuesResponse updateResult = sheetsService.spreadsheets().values()
+                .update(spreadsheetId, sheetName + "!A1", body)
+                .setValueInputOption("RAW")
+                .execute();
+            
+            log.info("Successfully saved {} eBay price results to sheet: {}", searchResults.size(), sheetName);
+            return sheetName;
+            
+        } catch (IOException e) {
+            log.error("Failed to save eBay price data to Google Sheets: {}", e.getMessage(), e);
+            throw e;
+        }
+    }
+    
+    /**
+     * Get eBay price data from the most recent sheet
+     */
+    public List<Map<String, String>> getEbayPriceData() throws IOException {
+        List<Map<String, String>> data = new ArrayList<>();
+        
+        if (spreadsheetId == null || spreadsheetId.isEmpty()) {
+            log.warn("No spreadsheet ID configured");
+            return data;
+        }
+        
+        try {
+            // Get all sheets
+            Spreadsheet spreadsheet = sheetsService.spreadsheets()
+                .get(spreadsheetId)
+                .execute();
+            
+            // Find eBay price sheets
+            List<Sheet> sheets = spreadsheet.getSheets();
+            Sheet latestSheet = null;
+            LocalDateTime latestDate = null;
+            
+            for (Sheet sheet : sheets) {
+                String sheetName = sheet.getProperties().getTitle();
+                if (sheetName.startsWith("eBay_Prices_")) {
+                    try {
+                        String dateStr = sheetName.substring("eBay_Prices_".length());
+                        LocalDateTime sheetDate = LocalDateTime.parse(dateStr, DATE_FORMATTER);
+                        
+                        if (latestDate == null || sheetDate.isAfter(latestDate)) {
+                            latestDate = sheetDate;
+                            latestSheet = sheet;
+                        }
+                    } catch (Exception e) {
+                        log.debug("Could not parse date from sheet name: {}", sheetName);
+                    }
+                }
+            }
+            
+            if (latestSheet == null) {
+                log.info("No eBay price sheets found");
+                return data;
+            }
+            
+            // Read data from the latest sheet
+            String sheetName = latestSheet.getProperties().getTitle();
+            ValueRange response = sheetsService.spreadsheets().values()
+                .get(spreadsheetId, sheetName + "!A:N")
+                .execute();
+            
+            List<List<Object>> values = response.getValues();
+            if (values == null || values.size() <= 1) {
+                return data;
+            }
+            
+            // Skip header row
+            for (int i = 1; i < values.size(); i++) {
+                List<Object> row = values.get(i);
+                Map<String, String> item = new HashMap<>();
+                
+                if (row.size() > 0) item.put("searchName", row.get(0).toString());
+                if (row.size() > 1) item.put("originalName", row.get(1).toString());
+                if (row.size() > 2) item.put("language", row.get(2).toString());
+                if (row.size() > 3) item.put("set", row.get(3).toString());
+                if (row.size() > 4) item.put("productType", row.get(4).toString());
+                if (row.size() > 5) item.put("facebookPrice", row.get(5).toString());
+                if (row.size() > 6) item.put("ebayLowest", row.get(6).toString());
+                if (row.size() > 7) item.put("ebayHighest", row.get(7).toString());
+                if (row.size() > 8) item.put("ebayAverage", row.get(8).toString());
+                if (row.size() > 9) item.put("ebayMedian", row.get(9).toString());
+                if (row.size() > 10) item.put("resultCount", row.get(10).toString());
+                if (row.size() > 11) item.put("allPrices", row.get(11).toString());
+                if (row.size() > 12) item.put("listingDetails", row.get(12).toString());
+                if (row.size() > 13) item.put("searchTime", row.get(13).toString());
+                
+                data.add(item);
+            }
+            
+            log.info("Retrieved {} eBay price records from sheet: {}", data.size(), sheetName);
+            return data;
+            
+        } catch (IOException e) {
+            log.error("Failed to retrieve eBay price data: {}", e.getMessage(), e);
+            return data;
         }
     }
     

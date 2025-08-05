@@ -616,6 +616,7 @@ public class FacebookMarketplaceService {
                             itemListing.put("price", item.get("price"));
                             itemListing.put("quantity", item.get("quantity"));
                             itemListing.put("priceUnit", item.get("priceUnit"));
+                            itemListing.put("language", item.getOrDefault("language", "English"));
                             itemListing.put("notes", item.get("notes"));
                             
                             // Add shared data

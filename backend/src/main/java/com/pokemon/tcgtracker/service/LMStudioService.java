@@ -50,12 +50,15 @@ public class LMStudioService {
                 - Product types: Singles, Booster Box, ETB (Elite Trainer Box), Bundle, Collection Box, Tin
                 - Prices next to items (common formats: "$25", "- $25", ": $25", "$25 each")
                 - Conditions: NM (Near Mint), LP (Lightly Played), MP, HP, Sealed, New, Used
+                - Language indicators: "Japanese", "Japan", "JP", "English" (default to English if not specified)
                 - Lists of multiple items with individual pricing
             
                 COMMON SELLER PATTERNS:
                 - "Charizard VMAX - $45"
                 - "Base Set Booster Box $5000"
                 - "ETBs: Vivid Voltage $65, Darkness Ablaze $55"
+                - "Unova mini tin (Bundle of 2) - $50" → itemName: "Unova mini tin", quantity: 2
+                - "Pokemon cards x5 - $25" → itemName: "Pokemon cards", quantity: 5
                 - Numbered lists with items and prices
                 - "All cards NM condition"
                 - "Prices firm" or "OBO" (or best offer)
@@ -72,6 +75,7 @@ public class LMStudioService {
                       "price": 0.00,
                       "quantity": 1,
                       "priceUnit": "each|lot|obo",
+                      "language": "English|Japanese (default to English if not specified)",
                       "notes": "Any specific notes about this item or empty string"
                     }
                   ],
@@ -86,6 +90,14 @@ public class LMStudioService {
                 3. If no individual prices are given, items might be priced as shown in header
                 4. Common abbreviations: ETB = Elite Trainer Box, BB = Booster Box, FA = Full Art, AA = Alternate Art
                 5. If text seems jumbled or repeated, try to extract the most logical interpretation
+                6. QUANTITY EXTRACTION: Look for quantity indicators in the item name and extract them:
+                   - "Bundle of 2" → quantity: 2, remove from itemName
+                   - "Pack of 5" → quantity: 5, remove from itemName  
+                   - "Set of 3" → quantity: 3, remove from itemName
+                   - "x2", "×2", "2x" → quantity: 2, remove from itemName
+                   - "(2)" at end of name → quantity: 2, remove from itemName
+                   - "Lot of 4" → quantity: 4, remove from itemName
+                   - Clean the itemName by removing quantity indicators but keep the core product name
                 
                 CRITICAL FIELD REQUIREMENTS - NEVER RETURN NULL OR UNDEFINED:
                 - itemName: MUST have a value, at minimum "Pokemon Product" if unclear
@@ -94,6 +106,7 @@ public class LMStudioService {
                 - price: Use 0.00 if no price found, never null or empty
                 - quantity: MUST be an integer (default to 1), never decimal or string
                 - priceUnit: Use "each" as default if unclear
+                - language: MUST be "English" or "Japanese", default to "English" if not specified
                 - notes: Empty string "" if no notes, never null
                 - mainListingPrice: Empty string "" if not found
                 - location: Empty string "" if not mentioned
