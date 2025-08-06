@@ -675,6 +675,9 @@ public class GoogleSheetsService {
         }
         
         try {
+            // Delete existing eBay price sheets for fresh search
+            deleteEbayPriceSheets();
+            
             // Create a timestamp for the sheet name
             String timestamp = LocalDateTime.now().format(DATE_FORMATTER);
             String sheetName = String.format("eBay_Prices_%s", timestamp);
@@ -687,7 +690,7 @@ public class GoogleSheetsService {
             // Prepare the data to write
             List<List<Object>> rows = new ArrayList<>();
             
-            // Add headers
+            // Add headers - includes listing details and price data
             rows.add(Arrays.asList(
                 "Search Name",
                 "Original Name",
@@ -695,13 +698,11 @@ public class GoogleSheetsService {
                 "Set",
                 "Product Type",
                 "Facebook Price",
-                "eBay Lowest",
-                "eBay Highest",
-                "eBay Average",
                 "eBay Median",
                 "Result Count",
-                "All Prices",
                 "Listing Details",
+                "All Prices",
+                "Top 5 Prices",
                 "Search Time"
             ));
             
@@ -714,23 +715,38 @@ public class GoogleSheetsService {
                 row.add(result.getOrDefault("set", ""));
                 row.add(result.getOrDefault("productType", ""));
                 row.add(result.getOrDefault("facebookPrice", ""));
-                row.add(result.getOrDefault("lowestPrice", ""));
-                row.add(result.getOrDefault("highestPrice", ""));
-                row.add(result.getOrDefault("averagePrice", ""));
                 row.add(result.getOrDefault("medianPrice", ""));
                 row.add(result.getOrDefault("resultCount", "0"));
                 
-                // Convert price list to string
-                List<Double> prices = (List<Double>) result.get("ebayPrices");
-                String pricesStr = prices != null ? prices.stream()
-                    .map(String::valueOf)
-                    .collect(Collectors.joining(", ")) : "";
-                row.add(pricesStr);
-                
-                // Convert listing details to string (markdown links)
-                List<String> listingDetails = (List<String>) result.get("listingDetails");
-                String listingDetailsStr = listingDetails != null ? String.join("\n", listingDetails) : "";
+                // Convert listing details list to string (markdown links)
+                Object listingDetailsObj = result.get("listingDetails");
+                String listingDetailsStr = "";
+                if (listingDetailsObj instanceof List) {
+                    listingDetailsStr = ((List<?>) listingDetailsObj).stream()
+                        .map(String::valueOf)
+                        .collect(Collectors.joining(" | "));
+                }
                 row.add(listingDetailsStr);
+                
+                // Convert price list to string for graph data
+                Object allPricesObj = result.get("allPrices");
+                String allPricesStr = "";
+                if (allPricesObj instanceof List) {
+                    allPricesStr = ((List<?>) allPricesObj).stream()
+                        .map(String::valueOf)
+                        .collect(Collectors.joining(","));
+                }
+                row.add(allPricesStr);
+                
+                // Convert top 5 prices to string for card graph
+                Object top5PricesObj = result.get("top5Prices");
+                String top5PricesStr = "";
+                if (top5PricesObj instanceof List) {
+                    top5PricesStr = ((List<?>) top5PricesObj).stream()
+                        .map(String::valueOf)
+                        .collect(Collectors.joining(","));
+                }
+                row.add(top5PricesStr);
                 
                 row.add(timestamp);
                 rows.add(row);
@@ -796,10 +812,10 @@ public class GoogleSheetsService {
                 return data;
             }
             
-            // Read data from the latest sheet
+            // Read data from the latest sheet - updated range to include all prices
             String sheetName = latestSheet.getProperties().getTitle();
             ValueRange response = sheetsService.spreadsheets().values()
-                .get(spreadsheetId, sheetName + "!A:N")
+                .get(spreadsheetId, sheetName + "!A:L")
                 .execute();
             
             List<List<Object>> values = response.getValues();
@@ -812,20 +828,19 @@ public class GoogleSheetsService {
                 List<Object> row = values.get(i);
                 Map<String, String> item = new HashMap<>();
                 
+                // Updated to include listing details and all prices
                 if (row.size() > 0) item.put("searchName", row.get(0).toString());
                 if (row.size() > 1) item.put("originalName", row.get(1).toString());
                 if (row.size() > 2) item.put("language", row.get(2).toString());
                 if (row.size() > 3) item.put("set", row.get(3).toString());
                 if (row.size() > 4) item.put("productType", row.get(4).toString());
                 if (row.size() > 5) item.put("facebookPrice", row.get(5).toString());
-                if (row.size() > 6) item.put("ebayLowest", row.get(6).toString());
-                if (row.size() > 7) item.put("ebayHighest", row.get(7).toString());
-                if (row.size() > 8) item.put("ebayAverage", row.get(8).toString());
-                if (row.size() > 9) item.put("ebayMedian", row.get(9).toString());
-                if (row.size() > 10) item.put("resultCount", row.get(10).toString());
-                if (row.size() > 11) item.put("allPrices", row.get(11).toString());
-                if (row.size() > 12) item.put("listingDetails", row.get(12).toString());
-                if (row.size() > 13) item.put("searchTime", row.get(13).toString());
+                if (row.size() > 6) item.put("ebayMedian", row.get(6).toString());
+                if (row.size() > 7) item.put("resultCount", row.get(7).toString());
+                if (row.size() > 8) item.put("listingDetails", row.get(8).toString());
+                if (row.size() > 9) item.put("allPrices", row.get(9).toString());
+                if (row.size() > 10) item.put("top5Prices", row.get(10).toString());
+                if (row.size() > 11) item.put("searchTime", row.get(11).toString());
                 
                 data.add(item);
             }
@@ -836,6 +851,35 @@ public class GoogleSheetsService {
         } catch (IOException e) {
             log.error("Failed to retrieve eBay price data: {}", e.getMessage(), e);
             return data;
+        }
+    }
+    
+    /**
+     * Delete existing eBay price sheets for fresh search
+     */
+    private void deleteEbayPriceSheets() throws IOException {
+        try {
+            Spreadsheet spreadsheet = sheetsService.spreadsheets().get(spreadsheetId).execute();
+            List<Sheet> sheets = spreadsheet.getSheets();
+            
+            for (Sheet sheet : sheets) {
+                String sheetName = sheet.getProperties().getTitle();
+                if (sheetName.startsWith("eBay_Prices_")) {
+                    int sheetId = sheet.getProperties().getSheetId();
+                    
+                    // Delete the sheet
+                    DeleteSheetRequest deleteRequest = new DeleteSheetRequest()
+                        .setSheetId(sheetId);
+                    
+                    BatchUpdateSpreadsheetRequest batchUpdateRequest = new BatchUpdateSpreadsheetRequest()
+                        .setRequests(Arrays.asList(new Request().setDeleteSheet(deleteRequest)));
+                    
+                    sheetsService.spreadsheets().batchUpdate(spreadsheetId, batchUpdateRequest).execute();
+                    log.info("Deleted old eBay price sheet: {}", sheetName);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to delete old eBay price sheets: {}", e.getMessage());
         }
     }
     

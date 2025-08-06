@@ -35,12 +35,10 @@ public class EbayPriceService {
             driver = webDriverService.getWebDriver();
             WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10));
             
-            // Check existing searches from Google Sheets
-            Set<String> alreadySearched = getAlreadySearchedItems();
+            // Fresh search - don't check existing searches, always perform new search
             
-            // Limit to 5 searches for testing
+            // Remove search limit - process all items
             int searchCount = 0;
-            final int MAX_SEARCHES = 5;
             
             for (Map<String, String> item : csvData) {
                 String itemName = item.get("Item Name");
@@ -59,17 +57,7 @@ public class EbayPriceService {
                 String language = detectLanguage(itemName, item.get("Notes"));
                 String searchNameWithLanguage = searchName + " " + language;
                 
-                // Check search limit first
-                if (searchCount >= MAX_SEARCHES) {
-                    logger.info("Reached maximum search limit of {} items for testing", MAX_SEARCHES);
-                    break;
-                }
-                
-                // Skip if already searched
-                if (alreadySearched.contains(searchNameWithLanguage.toLowerCase())) {
-                    logger.info("Skipping already searched item: {}", searchNameWithLanguage);
-                    continue;
-                }
+                // No search limit - process all items - fresh search every time
                 
                 // Skip if not English or Japanese
                 if (!isEnglishOrJapanese(itemName, item.get("Notes"))) {
@@ -98,21 +86,48 @@ public class EbayPriceService {
                     Thread.sleep(2000);
                     
                     // Extract prices and listing details from the specified div
-                    Map<String, Object> ebayData = extractEbayData(driver, wait);
+                    Map<String, Object> ebayData = extractEbayData(driver, wait, searchNameWithLanguage);
                     List<Double> prices = (List<Double>) ebayData.get("prices");
                     List<String> listingDetails = (List<String>) ebayData.get("listingDetails");
                     
                     if (!prices.isEmpty()) {
-                        itemResult.put("ebayPrices", prices);
-                        itemResult.put("lowestPrice", Collections.min(prices));
-                        itemResult.put("highestPrice", Collections.max(prices));
-                        itemResult.put("averagePrice", prices.stream().mapToDouble(Double::doubleValue).average().orElse(0));
-                        itemResult.put("medianPrice", calculateMedian(prices));
-                        itemResult.put("resultCount", prices.size());
-                        itemResult.put("listingDetails", listingDetails);
+                        // Calculate initial median
+                        double initialMedian = calculateMedian(prices);
+                        
+                        // Filter out prices that are more than 50% above the median
+                        double upperLimit = initialMedian * 1.5;
+                        List<Double> filteredPrices = new ArrayList<>();
+                        List<String> filteredListingDetails = new ArrayList<>();
+                        
+                        for (int i = 0; i < prices.size(); i++) {
+                            if (prices.get(i) <= upperLimit) {
+                                filteredPrices.add(prices.get(i));
+                                filteredListingDetails.add(listingDetails.get(i));
+                            } else {
+                                logger.debug("Filtering out price ${} which is >50% above median ${}", 
+                                    prices.get(i), initialMedian);
+                            }
+                        }
+                        
+                        // Recalculate median with filtered prices
+                        double finalMedian = filteredPrices.isEmpty() ? initialMedian : calculateMedian(filteredPrices);
+                        
+                        // Keep all listing details for viewing, but store first 5 prices separately for top graph
+                        List<Double> top5Prices = filteredPrices.size() > 5 
+                            ? filteredPrices.subList(0, 5) 
+                            : filteredPrices;
+                        
+                        // Keep all filtered data
+                        itemResult.put("medianPrice", finalMedian);
+                        itemResult.put("resultCount", filteredPrices.size());
+                        itemResult.put("listingDetails", filteredListingDetails); // All listings
+                        itemResult.put("allPrices", filteredPrices); // All prices for main graph
+                        itemResult.put("top5Prices", top5Prices); // First 5 prices for card graph
+                        itemResult.put("originalCount", prices.size());
+                        itemResult.put("filteredCount", prices.size() - filteredPrices.size());
                     } else {
-                        itemResult.put("ebayPrices", new ArrayList<>());
                         itemResult.put("listingDetails", new ArrayList<>());
+                        itemResult.put("allPrices", new ArrayList<>());
                         itemResult.put("error", "No sold listings found");
                     }
                     
@@ -151,7 +166,7 @@ public class EbayPriceService {
         return result;
     }
     
-    private Map<String, Object> extractEbayData(WebDriver driver, WebDriverWait wait) {
+    private Map<String, Object> extractEbayData(WebDriver driver, WebDriverWait wait, String searchTerm) {
         List<Double> prices = new ArrayList<>();
         List<String> listingDetails = new ArrayList<>();
         
@@ -183,7 +198,16 @@ public class EbayPriceService {
                 }
             }
             
+            // Limit to 30 results per item
+            int resultCount = 0;
+            final int MAX_RESULTS = 30;
+            
             for (WebElement listingElement : listingElements) {
+                if (resultCount >= MAX_RESULTS) {
+                    logger.info("Reached maximum of {} results per item", MAX_RESULTS);
+                    break;
+                }
+                
                 try {
                     // Extract price - try multiple selectors
                     WebElement priceElement = null;
@@ -239,7 +263,35 @@ public class EbayPriceService {
                     
                     // Skip if title contains unwanted text
                     if (title.toLowerCase().contains("shop on ebay") || 
-                        title.toLowerCase().contains("new listing")) {
+                        title.toLowerCase().contains("new listing") ||
+                        title.toLowerCase().contains("empty")) {
+                        continue;
+                    }
+                    
+                    // PSA filtering: If search doesn't include "PSA", exclude PSA listings
+                    boolean searchIncludesPSA = searchTerm.toLowerCase().contains("psa");
+                    boolean titleIncludesPSA = title.toLowerCase().contains("psa");
+                    
+                    if (!searchIncludesPSA && titleIncludesPSA) {
+                        logger.debug("Skipping PSA listing since search doesn't include PSA: {}", title);
+                        continue;
+                    }
+                    
+                    // Skip multiple quantity listings (sets, bundles, lots, etc)
+                    if (isMultipleQuantityListing(title)) {
+                        logger.debug("Skipping multiple quantity listing: {}", title);
+                        continue;
+                    }
+                    
+                    // Skip Pokemon Center/Centre exclusive items (premium versions)
+                    if (isPokemonCenterListing(title)) {
+                        logger.debug("Skipping Pokemon Center exclusive listing: {}", title);
+                        continue;
+                    }
+                    
+                    // Skip listings with multiple different products
+                    if (hasMultipleProducts(title)) {
+                        logger.debug("Skipping multiple products listing: {}", title);
                         continue;
                     }
                     
@@ -271,6 +323,7 @@ public class EbayPriceService {
                     
                     prices.add(price);
                     listingDetails.add(listingDetail);
+                    resultCount++; // Increment counter for successful extractions
                     
                 } catch (Exception e) {
                     logger.debug("Could not extract data from listing element: {}", e.getMessage());
@@ -409,25 +462,6 @@ public class EbayPriceService {
         return true;
     }
     
-    private Set<String> getAlreadySearchedItems() {
-        Set<String> searched = new HashSet<>();
-        
-        try {
-            if (googleSheetsService != null) {
-                List<Map<String, String>> existingData = googleSheetsService.getEbayPriceData();
-                for (Map<String, String> row : existingData) {
-                    String searchName = row.get("searchName");
-                    if (searchName != null) {
-                        searched.add(searchName.toLowerCase());
-                    }
-                }
-            }
-        } catch (Exception e) {
-            logger.error("Error getting existing searches", e);
-        }
-        
-        return searched;
-    }
     
     private double calculateMedian(List<Double> prices) {
         List<Double> sorted = new ArrayList<>(prices);
@@ -439,5 +473,150 @@ public class EbayPriceService {
         } else {
             return sorted.get(size / 2);
         }
+    }
+    
+    /**
+     * Check if listing title indicates multiple quantities (sets, bundles, lots, etc)
+     */
+    private boolean isMultipleQuantityListing(String title) {
+        if (title == null) return false;
+        
+        String lowerTitle = title.toLowerCase();
+        
+        // Pattern matching for multiple quantities
+        // Check for "set of X", "X pack", "lot of X", etc.
+        if (lowerTitle.matches(".*\\bset of \\d+.*") ||
+            lowerTitle.matches(".*\\b\\d+\\s*pack\\b.*") ||
+            lowerTitle.matches(".*\\b\\d+-pack\\b.*") ||
+            lowerTitle.matches(".*\\blot of \\d+.*") ||
+            lowerTitle.matches(".*\\b\\d+x\\b.*") ||
+            lowerTitle.matches(".*\\bx\\d+\\b.*") ||
+            lowerTitle.matches("^\\d+x\\s+.*")) {
+            return true;
+        }
+        
+        // Check for common multiple quantity keywords
+        String[] multipleKeywords = {
+            "bundle", "set of", "pack of", "lot of", "display",
+            "case of", "box of", "collection", "bulk",
+            "multiple", "combo", "package deal", "sealed case",
+            // Specific patterns from your examples
+            "display box", "factory sealed display", "sealed display"
+        };
+        
+        for (String keyword : multipleKeywords) {
+            if (lowerTitle.contains(keyword)) {
+                return true;
+            }
+        }
+        
+        // Check for quantity indicators at the beginning (e.g., "2x Pokemon", "5x Elite")
+        if (lowerTitle.matches("^\\d+\\s*x\\s+.*")) {
+            return true;
+        }
+        
+        // Check for parenthetical quantities (e.g., "(Set of 10)", "(5 Pack)")
+        if (lowerTitle.matches(".*\\(.*\\d+.*\\).*") && 
+            (lowerTitle.contains("set") || lowerTitle.contains("pack") || 
+             lowerTitle.contains("lot") || lowerTitle.contains("bundle"))) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Check if listing is a Pokemon Center/Centre exclusive (premium versions)
+     */
+    private boolean isPokemonCenterListing(String title) {
+        if (title == null) return false;
+        
+        String lowerTitle = title.toLowerCase();
+        
+        // Check for Pokemon Center/Centre variations
+        return lowerTitle.contains("pokemon center") ||
+               lowerTitle.contains("pokemon centre") ||
+               lowerTitle.contains("pokemon-center") ||
+               lowerTitle.contains("pokemon-centre") ||
+               lowerTitle.contains("pokémon center") ||
+               lowerTitle.contains("pokémon centre") ||
+               lowerTitle.contains(" pc elite") || // PC often means Pokemon Center
+               lowerTitle.contains(" pc etb") ||
+               lowerTitle.contains("center edition") ||
+               lowerTitle.contains("centre edition") ||
+               lowerTitle.contains("center exclusive") ||
+               lowerTitle.contains("centre exclusive");
+    }
+    
+    /**
+     * Check if listing contains multiple different products (e.g., "Black Bolt and White Flare")
+     */
+    private boolean hasMultipleProducts(String title) {
+        if (title == null) return false;
+        
+        String lowerTitle = title.toLowerCase();
+        
+        // Common patterns that indicate multiple different products
+        // Check for "and" between product names
+        if (lowerTitle.matches(".*\\b\\w+\\s+(and|&)\\s+\\w+\\s+(etb|elite|trainer|box|booster|tin).*")) {
+            // But allow single products with "and" in their name (e.g., "Black and White Base Set")
+            // Check if it mentions "both" or "set" which confirms multiple items
+            if (lowerTitle.contains("both") || 
+                lowerTitle.contains("set sealed") || 
+                lowerTitle.contains("set of")) {
+                return true;
+            }
+            
+            // Count distinct product indicators before and after "and/&"
+            String[] parts = lowerTitle.split("\\s+(and|&)\\s+");
+            if (parts.length >= 2) {
+                // If both parts contain product-specific words, it's likely multiple products
+                boolean firstHasProduct = containsProductName(parts[0]);
+                boolean secondHasProduct = containsProductName(parts[1]);
+                if (firstHasProduct && secondHasProduct) {
+                    return true;
+                }
+            }
+        }
+        
+        // Check for comma-separated lists of products
+        if (lowerTitle.matches(".*,.*,.*") && 
+            (lowerTitle.contains("etb") || lowerTitle.contains("elite") || 
+             lowerTitle.contains("trainer") || lowerTitle.contains("booster"))) {
+            return true;
+        }
+        
+        // Specific indicators of multiple products
+        String[] multiProductIndicators = {
+            "both etb", "both elite", "all three", "all 3",
+            "complete set", "full set"
+        };
+        
+        for (String indicator : multiProductIndicators) {
+            if (lowerTitle.contains(indicator)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Helper method to check if a string contains product-specific names
+     */
+    private boolean containsProductName(String text) {
+        String[] productIndicators = {
+            "bolt", "flare", "forces", "fates", "flames", "rift", "crown",
+            "zenith", "fusion", "voltage", "silver", "gold", "base",
+            "origins", "guardians", "bonds", "clash", "siege",
+            "ultra", "shining", "hidden", "vivid", "battle", "roaring"
+        };
+        
+        for (String indicator : productIndicators) {
+            if (text.contains(indicator)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -10,9 +10,15 @@ import org.openqa.selenium.WebElement;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import org.openqa.selenium.support.ui.WebDriverWait;
+import org.openqa.selenium.support.ui.ExpectedConditions;
 
 @Slf4j
 @Service
@@ -23,6 +29,18 @@ public class FacebookMarketplaceService {
     private final LMStudioService lmStudioService;
     private final GoogleSheetsService googleSheetsService;
     private final ConfigurationService configurationService;
+    
+    // Smart caching for processed URLs to avoid repeated Google Sheets calls
+    private final Map<String, LocalDateTime> urlCache = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> searchTermUrlCache = new ConcurrentHashMap<>();
+    private LocalDateTime cacheLastUpdated = null;
+    private static final long CACHE_REFRESH_HOURS = 1; // Refresh cache every hour
+    
+    // Configurable timing parameters for optimization
+    private static final Duration DEFAULT_PAGE_LOAD_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration DEFAULT_SCROLL_WAIT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration DEFAULT_LISTING_LOAD_TIMEOUT = Duration.ofSeconds(8);
+    private static final Duration DEFAULT_ELEMENT_WAIT_TIMEOUT = Duration.ofSeconds(2);
 
     private static final String MARKETPLACE_BASE_URL = "https://www.facebook.com/marketplace";
     private static final Pattern PRICE_PATTERN = Pattern.compile("\\$([0-9,]+(?:\\.[0-9]{2})?)");
@@ -55,8 +73,8 @@ public class FacebookMarketplaceService {
                     String searchUrl = buildSearchUrl(searchTerm);
                     driver.get(searchUrl);
                     
-                    // Wait for page to load
-                    Thread.sleep(3000);
+                    // Wait for page to load dynamically
+                    waitForPageLoad(driver);
                     
                     // Check if login is required
                     if (isLoginRequired(driver)) {
@@ -91,47 +109,35 @@ public class FacebookMarketplaceService {
     }
     
     /**
-     * Process search results with navigation to individual listing pages
-     * This method navigates to each listing page for detailed scraping
+     * Process search results with optimized navigation - collect all URLs first, then process in batches
+     * This method reduces back-and-forth navigation for better performance
      */
     private List<Map<String, Object>> processSearchResultsWithNavigation(WebDriver driver, String searchTerm) {
         List<Map<String, Object>> listings = new ArrayList<>();
-        String searchResultsUrl = driver.getCurrentUrl();
         
         try {
             // Scroll to load more listings
             webDriverService.humanLikeScroll(driver);
-            Thread.sleep(2000);
+            waitForScrollContent(driver);
             
             // Find all listing URLs on the search results page
             List<String> listingUrls = collectListingUrls(driver);
             log.info("📋 Found {} listing URLs for '{}'", listingUrls.size(), searchTerm);
             
-            // Process up to 15 listings per search term
-            int maxItems = 15;
-            int processedCount = 0;
+            // Filter and deduplicate URLs upfront
+            List<String> urlsToProcess = filterAndDeduplicateUrls(listingUrls, 15);
+            log.info("📝 After filtering: {} URLs to process for '{}'", urlsToProcess.size(), searchTerm);
             
-            for (String listingUrl : listingUrls) {
-                if (processedCount >= maxItems) {
-                    log.info("📊 Reached {} item limit for search term '{}'", maxItems, searchTerm);
-                    break;
-                }
-                
+            // Process URLs in batch without returning to search results each time
+            int processedCount = 0;
+            for (String listingUrl : urlsToProcess) {
                 try {
-                    // Clean the URL
                     String cleanUrl = cleanMarketplaceUrl(listingUrl);
-                    
-                    // Check if this URL should be refreshed (7-day rule)
-                    if (!shouldProcessUrl(cleanUrl)) {
-                        log.info("⏭️ Skipping URL (recently updated): {}", cleanUrl);
-                        continue;
-                    }
-                    
-                    log.info("🔗 Navigating to listing {}/{}: {}", processedCount + 1, maxItems, cleanUrl);
+                    log.info("🔗 Processing listing {}/{}: {}", processedCount + 1, urlsToProcess.size(), cleanUrl);
                     
                     // Navigate to the individual listing page
                     driver.get(cleanUrl);
-                    Thread.sleep(3000); // Wait for listing page to load
+                    waitForListingPageLoad(driver);
                     
                     // Check if we're on the correct listing page
                     String currentUrl = driver.getCurrentUrl();
@@ -146,40 +152,27 @@ public class FacebookMarketplaceService {
                         break;
                     }
                     
-                    // Extract listing data from the individual listing page
+                    // Extract and analyze listing data
                     Map<String, Object> listing = extractListingDataFromPage(driver, cleanUrl, searchTerm);
                     if (listing != null && !listing.isEmpty()) {
-                        // Use LM Studio to analyze the listing
                         List<Map<String, Object>> itemsFromListing = analyzeListingWithAI(listing);
                         
                         if (!itemsFromListing.isEmpty()) {
                             listings.addAll(itemsFromListing);
                             processedCount++;
                             
-                            // Save all items to Google Sheets (will delete old rows and add new ones)
+                            // Save all items to Google Sheets
                             googleSheetsService.addMarketplaceListings(itemsFromListing);
                             
                             log.info("✅ Successfully processed listing {}/{} with {} items from: {}", 
-                                    processedCount, maxItems, itemsFromListing.size(), cleanUrl);
+                                    processedCount, urlsToProcess.size(), itemsFromListing.size(), cleanUrl);
                         } else {
                             log.warn("⚠️ No items extracted from listing: {}", cleanUrl);
                         }
                     }
                     
-                    // Navigate back to search results
-                    log.debug("🔙 Returning to search results");
-                    driver.get(searchResultsUrl);
-                    Thread.sleep(2000); // Wait for search page to reload
-                    
                 } catch (Exception e) {
                     log.warn("⚠️ Failed to process listing: {}", e.getMessage());
-                    // Try to return to search results
-                    try {
-                        driver.get(searchResultsUrl);
-                        Thread.sleep(1000);
-                    } catch (Exception ex) {
-                        log.warn("Failed to return to search results: {}", ex.getMessage());
-                    }
                 }
             }
             
@@ -188,6 +181,38 @@ public class FacebookMarketplaceService {
         }
         
         return listings;
+    }
+    
+    /**
+     * Filter URLs and remove duplicates upfront to avoid unnecessary processing
+     */
+    private List<String> filterAndDeduplicateUrls(List<String> urls, int maxItems) {
+        Set<String> uniqueUrls = new LinkedHashSet<>();
+        List<String> filteredUrls = new ArrayList<>();
+        
+        for (String url : urls) {
+            if (filteredUrls.size() >= maxItems) {
+                break;
+            }
+            
+            String cleanUrl = cleanMarketplaceUrl(url);
+            
+            // Skip if already seen (deduplication)
+            if (uniqueUrls.contains(cleanUrl)) {
+                continue;
+            }
+            
+            // Check if URL should be processed (caching check)
+            if (!shouldProcessUrl(cleanUrl)) {
+                log.debug("⏭️ Skipping URL (recently updated): {}", cleanUrl);
+                continue;
+            }
+            
+            uniqueUrls.add(cleanUrl);
+            filteredUrls.add(cleanUrl);
+        }
+        
+        return filteredUrls;
     }
     
     /**
@@ -221,14 +246,138 @@ public class FacebookMarketplaceService {
     }
     
     /**
-     * Check if a URL should be processed based on 7-day rule
+     * Check if a URL should be processed based on 7-day rule with smart caching
      */
     private boolean shouldProcessUrl(String url) {
         try {
-            return googleSheetsService.shouldRefreshUrl(url);
+            // Check cache first
+            if (isUrlCachedAndRecent(url)) {
+                LocalDateTime lastUpdate = urlCache.get(url);
+                long daysSinceUpdate = ChronoUnit.DAYS.between(lastUpdate, LocalDateTime.now());
+                return daysSinceUpdate >= 7;
+            }
+            
+            // Not in cache, check Google Sheets and cache the result
+            boolean shouldProcess = googleSheetsService.shouldRefreshUrl(url);
+            
+            // Cache the result with current timestamp if URL exists in sheets
+            if (!shouldProcess) {
+                urlCache.put(url, LocalDateTime.now().minusDays(1)); // Mark as recently processed
+            }
+            
+            return shouldProcess;
         } catch (Exception e) {
             log.warn("Failed to check URL refresh status, will process: {}", e.getMessage());
             return true; // Process if we can't check
+        }
+    }
+    
+    /**
+     * Check if URL is in cache and cache is still fresh
+     */
+    private boolean isUrlCachedAndRecent(String url) {
+        if (cacheLastUpdated == null || 
+            ChronoUnit.HOURS.between(cacheLastUpdated, LocalDateTime.now()) >= CACHE_REFRESH_HOURS) {
+            refreshUrlCache();
+        }
+        return urlCache.containsKey(url);
+    }
+    
+    /**
+     * Refresh the URL cache by loading recent URLs from Google Sheets
+     */
+    private void refreshUrlCache() {
+        try {
+            log.info("🔄 Refreshing URL cache from Google Sheets");
+            urlCache.clear();
+            
+            // Get all recent listings from sheets to populate cache
+            List<Map<String, Object>> recentListings = googleSheetsService.getAllMarketplaceListings();
+            
+            for (Map<String, Object> listing : recentListings) {
+                String url = (String) listing.get("url");
+                Object dateObj = listing.get("dateFound");
+                
+                if (url != null && dateObj != null) {
+                    LocalDateTime date = parseDate(dateObj);
+                    if (date != null) {
+                        urlCache.put(cleanMarketplaceUrl(url), date);
+                    }
+                }
+            }
+            
+            cacheLastUpdated = LocalDateTime.now();
+            log.info("✅ URL cache refreshed with {} entries", urlCache.size());
+            
+        } catch (Exception e) {
+            log.warn("Failed to refresh URL cache: {}", e.getMessage());
+            cacheLastUpdated = LocalDateTime.now(); // Prevent constant retries
+        }
+    }
+    
+    /**
+     * Parse date object from various formats
+     */
+    private LocalDateTime parseDate(Object dateObj) {
+        try {
+            if (dateObj instanceof Date) {
+                return ((Date) dateObj).toInstant()
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .toLocalDateTime();
+            } else if (dateObj instanceof LocalDateTime) {
+                return (LocalDateTime) dateObj;
+            } else if (dateObj instanceof String) {
+                return LocalDateTime.parse((String) dateObj);
+            }
+        } catch (Exception e) {
+            log.debug("Failed to parse date: {}", dateObj);
+        }
+        return null;
+    }
+    
+    /**
+     * Wait for page to load dynamically instead of fixed sleep
+     */
+    private void waitForPageLoad(WebDriver driver) {
+        try {
+            WebDriverWait wait = new WebDriverWait(driver, DEFAULT_PAGE_LOAD_TIMEOUT);
+            wait.until(webDriver -> ((JavascriptExecutor) webDriver)
+                .executeScript("return document.readyState").equals("complete"));
+        } catch (Exception e) {
+            log.debug("Page load wait timed out after {}ms, continuing: {}", 
+                     DEFAULT_PAGE_LOAD_TIMEOUT.toMillis(), e.getMessage());
+        }
+    }
+    
+    /**
+     * Wait for content to load after scrolling
+     */
+    private void waitForScrollContent(WebDriver driver) {
+        try {
+            WebDriverWait wait = new WebDriverWait(driver, DEFAULT_SCROLL_WAIT_TIMEOUT);
+            // Wait for any marketplace items to be present
+            wait.until(ExpectedConditions.presenceOfElementLocated(
+                By.cssSelector("a[href*='/marketplace/item/'], div[data-testid='marketplace-item']")));
+        } catch (Exception e) {
+            log.debug("Scroll content wait timed out after {}ms, continuing: {}", 
+                     DEFAULT_SCROLL_WAIT_TIMEOUT.toMillis(), e.getMessage());
+        }
+    }
+    
+    /**
+     * Wait for listing page to load with specific elements
+     */
+    private void waitForListingPageLoad(WebDriver driver) {
+        try {
+            WebDriverWait wait = new WebDriverWait(driver, DEFAULT_LISTING_LOAD_TIMEOUT);
+            // Wait for either the listing content or login requirement
+            wait.until(driver1 -> 
+                driver1.getCurrentUrl().contains("/marketplace/item/") ||
+                isLoginRequired(driver1) ||
+                driver1.getPageSource().contains("marketplace"));
+        } catch (Exception e) {
+            log.debug("Listing page load wait timed out after {}ms, continuing: {}", 
+                     DEFAULT_LISTING_LOAD_TIMEOUT.toMillis(), e.getMessage());
         }
     }
 
@@ -247,8 +396,8 @@ public class FacebookMarketplaceService {
             String searchUrl = buildSearchUrl(searchTerm);
             driver.get(searchUrl);
             
-            // Wait for page to load
-            Thread.sleep(3000);
+            // Wait for page to load dynamically
+            waitForPageLoad(driver);
             
             // Check if login is required
             if (isLoginRequired(driver)) {
@@ -272,43 +421,34 @@ public class FacebookMarketplaceService {
     
     /**
      * Process search results with navigation to individual listing pages (with custom max items)
+     * Optimized version that processes URLs in batch without returning to search results
      */
     private List<Map<String, Object>> processSearchResultsWithNavigation(WebDriver driver, String searchTerm, int maxItems) {
         List<Map<String, Object>> listings = new ArrayList<>();
-        String searchResultsUrl = driver.getCurrentUrl();
         
         try {
             // Scroll to load more listings
             webDriverService.humanLikeScroll(driver);
-            Thread.sleep(2000);
+            waitForScrollContent(driver);
             
             // Find all listing URLs on the search results page
             List<String> listingUrls = collectListingUrls(driver);
             log.info("📋 Found {} listing URLs for '{}'", listingUrls.size(), searchTerm);
             
-            int processedCount = 0;
+            // Filter and deduplicate URLs upfront with custom maxItems
+            List<String> urlsToProcess = filterAndDeduplicateUrls(listingUrls, maxItems);
+            log.info("📝 After filtering: {} URLs to process for '{}'", urlsToProcess.size(), searchTerm);
             
-            for (String listingUrl : listingUrls) {
-                if (processedCount >= maxItems) {
-                    log.info("📊 Reached {} item limit for search term '{}'", maxItems, searchTerm);
-                    break;
-                }
-                
+            // Process URLs in batch without returning to search results each time
+            int processedCount = 0;
+            for (String listingUrl : urlsToProcess) {
                 try {
-                    // Clean the URL
                     String cleanUrl = cleanMarketplaceUrl(listingUrl);
-                    
-                    // Check if this URL should be refreshed (7-day rule)
-                    if (!shouldProcessUrl(cleanUrl)) {
-                        log.info("⏭️ Skipping URL (recently updated): {}", cleanUrl);
-                        continue;
-                    }
-                    
-                    log.info("🔗 Navigating to listing {}/{}: {}", processedCount + 1, maxItems, cleanUrl);
+                    log.info("🔗 Processing listing {}/{}: {}", processedCount + 1, urlsToProcess.size(), cleanUrl);
                     
                     // Navigate to the individual listing page
                     driver.get(cleanUrl);
-                    Thread.sleep(3000); // Wait for listing page to load
+                    waitForListingPageLoad(driver);
                     
                     // Check if we're on the correct listing page
                     String currentUrl = driver.getCurrentUrl();
@@ -323,40 +463,27 @@ public class FacebookMarketplaceService {
                         break;
                     }
                     
-                    // Extract listing data from the individual listing page
+                    // Extract and analyze listing data
                     Map<String, Object> listing = extractListingDataFromPage(driver, cleanUrl, searchTerm);
                     if (listing != null && !listing.isEmpty()) {
-                        // Use LM Studio to analyze the listing
                         List<Map<String, Object>> itemsFromListing = analyzeListingWithAI(listing);
                         
                         if (!itemsFromListing.isEmpty()) {
                             listings.addAll(itemsFromListing);
                             processedCount++;
                             
-                            // Save all items to Google Sheets (will delete old rows and add new ones)
+                            // Save all items to Google Sheets
                             googleSheetsService.addMarketplaceListings(itemsFromListing);
                             
                             log.info("✅ Successfully processed listing {}/{} with {} items from: {}", 
-                                    processedCount, maxItems, itemsFromListing.size(), cleanUrl);
+                                    processedCount, urlsToProcess.size(), itemsFromListing.size(), cleanUrl);
                         } else {
                             log.warn("⚠️ No items extracted from listing: {}", cleanUrl);
                         }
                     }
                     
-                    // Navigate back to search results
-                    log.debug("🔙 Returning to search results");
-                    driver.get(searchResultsUrl);
-                    Thread.sleep(2000); // Wait for search page to reload
-                    
                 } catch (Exception e) {
                     log.warn("⚠️ Failed to process listing: {}", e.getMessage());
-                    // Try to return to search results
-                    try {
-                        driver.get(searchResultsUrl);
-                        Thread.sleep(1000);
-                    } catch (Exception ex) {
-                        log.warn("Failed to return to search results: {}", ex.getMessage());
-                    }
                 }
             }
             
@@ -712,11 +839,16 @@ public class FacebookMarketplaceService {
                     
                     // Scroll to the element first to ensure it's in view
                     ((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", seeMoreButton);
-                    Thread.sleep(500);
+                    
+                    // Wait for element to be clickable
+                    WebDriverWait shortWait = new WebDriverWait(driver, DEFAULT_ELEMENT_WAIT_TIMEOUT);
+                    shortWait.until(ExpectedConditions.elementToBeClickable(seeMoreButton));
                     
                     // Try regular click first
                     seeMoreButton.click();
-                    Thread.sleep(1000); // Wait for expansion to complete
+                    
+                    // Wait for expansion to complete by checking for content change
+                    shortWait.until(driver1 -> driver1.getPageSource().length() > driver.getPageSource().length() * 0.95);
                     
                     log.info("✅ Successfully clicked 'See more' button");
                     
@@ -725,7 +857,13 @@ public class FacebookMarketplaceService {
                     try {
                         // Fallback to JavaScript click
                         ((JavascriptExecutor) driver).executeScript("arguments[0].click();", seeMoreButton);
-                        Thread.sleep(1000);
+                        
+                        // Brief wait for JavaScript click to take effect
+                        WebDriverWait jsWait = new WebDriverWait(driver, DEFAULT_ELEMENT_WAIT_TIMEOUT);
+                        final WebElement finalSeeMoreButton = seeMoreButton; // Make it final for lambda
+                        jsWait.until(driver1 -> !finalSeeMoreButton.isDisplayed() || 
+                                    driver1.getPageSource().contains("See less"));
+                        
                         log.info("✅ Successfully clicked 'See more' button with JavaScript");
                     } catch (Exception jsException) {
                         log.warn("Failed to click 'See more' button: {}", jsException.getMessage());
