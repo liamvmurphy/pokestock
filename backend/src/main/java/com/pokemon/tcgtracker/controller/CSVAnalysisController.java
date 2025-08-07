@@ -16,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -251,8 +252,8 @@ public class CSVAnalysisController {
             
             log.info("Found {} marketplace listings for analysis", marketplaceData.size());
             
-            // Convert marketplace data to CSV format
-            String csvContent = convertMarketplaceDataToCSV(marketplaceData);
+            // Convert marketplace data to CSV format, merged with eBay data
+            String csvContent = convertMarketplaceDataToCSVWithEbay(marketplaceData);
             
             // Use the master prompt analysis method
             Map<String, Object> analysisResult = csvAnalysisService.analyzeCSVWithMasterPrompt(csvContent);
@@ -274,7 +275,7 @@ public class CSVAnalysisController {
     }
     
     /**
-     * Convert marketplace data to CSV format for analysis
+     * Convert marketplace data to CSV format for analysis (legacy method - without eBay data)
      */
     private String convertMarketplaceDataToCSV(List<Map<String, Object>> marketplaceData) {
         StringBuilder csvBuilder = new StringBuilder();
@@ -301,6 +302,128 @@ public class CSVAnalysisController {
         }
         
         return csvBuilder.toString();
+    }
+    
+    /**
+     * Convert marketplace data to CSV format for analysis, with integrated eBay price data
+     */
+    private String convertMarketplaceDataToCSVWithEbay(List<Map<String, Object>> marketplaceData) {
+        StringBuilder csvBuilder = new StringBuilder();
+        
+        // No need to fetch eBay data separately - it's already in the marketplaceData from the unified sheet
+        log.info("Processing {} marketplace records with integrated eBay data", marketplaceData.size());
+        
+        // Add extended CSV headers including eBay data
+        csvBuilder.append("Date Found,Item Name,Set,Product Type,Price,Quantity,Price Unit,")
+                 .append("Main Listing Price,Location,Has Multiple Items,Marketplace URL,Notes,")
+                 .append("eBay Median Price,eBay Listing 1 Title,eBay Listing 1 Price,")
+                 .append("eBay Listing 2 Title,eBay Listing 2 Price,eBay Listing 3 Title,eBay Listing 3 Price,")
+                 .append("eBay Listing 4 Title,eBay Listing 4 Price,eBay Listing 5 Title,eBay Listing 5 Price\n");
+        
+        // Add data rows - eBay data is already integrated in marketplaceData
+        for (Map<String, Object> listing : marketplaceData) {
+            // Facebook Marketplace data
+            csvBuilder.append(escapeCsvValue(listing.get("dateFound")))
+                     .append(",").append(escapeCsvValue(listing.get("itemName")))
+                     .append(",").append(escapeCsvValue(listing.get("set")))
+                     .append(",").append(escapeCsvValue(listing.get("productType")))
+                     .append(",").append(escapeCsvValue(listing.get("price")))
+                     .append(",").append(escapeCsvValue(listing.get("quantity")))
+                     .append(",").append(escapeCsvValue(listing.get("priceUnit")))
+                     .append(",").append(escapeCsvValue(listing.get("mainListingPrice")))
+                     .append(",").append(escapeCsvValue(listing.get("location")))
+                     .append(",").append(escapeCsvValue(listing.get("hasMultipleItems")))
+                     .append(",").append(escapeCsvValue(listing.get("marketplaceUrl")))
+                     .append(",").append(escapeCsvValue(listing.get("notes")));
+            
+            // eBay data from integrated columns
+            Object ebayMedian = listing.get("ebayMedianPrice");
+            Object ebayListingDetails = listing.get("ebayListingDetails");
+            
+            if (ebayMedian != null && !ebayMedian.toString().isEmpty()) {
+                // eBay data exists
+                csvBuilder.append(",").append(escapeCsvValue(ebayMedian));
+                
+                // Extract first 5 eBay listings from listingDetails
+                List<EbayListingInfo> ebayListings = extractEbayListings(
+                    ebayListingDetails != null ? ebayListingDetails.toString() : "", 5);
+                
+                // Add eBay listing titles and prices (up to 5)
+                for (int j = 0; j < 5; j++) {
+                    if (j < ebayListings.size()) {
+                        EbayListingInfo listing_info = ebayListings.get(j);
+                        csvBuilder.append(",").append(escapeCsvValue(listing_info.title))
+                                 .append(",").append(escapeCsvValue(listing_info.price));
+                    } else {
+                        // Empty fields if fewer than 5 listings available
+                        csvBuilder.append(",,");
+                    }
+                }
+            } else {
+                // No eBay data available for this row - add empty fields
+                csvBuilder.append(",,,,,,,,,,,"); // 11 empty eBay fields
+            }
+            
+            csvBuilder.append("\n");
+        }
+        
+        return csvBuilder.toString();
+    }
+    
+    /**
+     * Helper class to hold eBay listing information
+     */
+    private static class EbayListingInfo {
+        final String title;
+        final String price;
+        
+        EbayListingInfo(String title, String price) {
+            this.title = title;
+            this.price = price;
+        }
+    }
+    
+    /**
+     * Extract eBay listing titles and prices from markdown formatted listing details
+     * Format: [Title_$Price](URL) separated by " | "
+     */
+    private List<EbayListingInfo> extractEbayListings(String listingDetails, int maxListings) {
+        List<EbayListingInfo> listings = new ArrayList<>();
+        
+        if (listingDetails == null || listingDetails.trim().isEmpty()) {
+            return listings;
+        }
+        
+        // Split by " | " to get individual listings
+        String[] individualListings = listingDetails.split(" \\| ");
+        
+        for (int i = 0; i < Math.min(individualListings.length, maxListings); i++) {
+            String listing = individualListings[i].trim();
+            
+            // Parse markdown format: [Title_$Price](URL)
+            if (listing.matches("\\[.*?\\]\\(.*?\\)")) {
+                int startBracket = listing.indexOf('[');
+                int endBracket = listing.indexOf(']');
+                
+                if (startBracket >= 0 && endBracket > startBracket) {
+                    String titleAndPrice = listing.substring(startBracket + 1, endBracket);
+                    
+                    // Split by last underscore followed by $ to separate title and price
+                    int lastUnderscoreIndex = titleAndPrice.lastIndexOf("_$");
+                    if (lastUnderscoreIndex > 0) {
+                        String title = titleAndPrice.substring(0, lastUnderscoreIndex);
+                        String priceWithDollar = titleAndPrice.substring(lastUnderscoreIndex + 1); // Includes $
+                        
+                        listings.add(new EbayListingInfo(title, priceWithDollar));
+                    } else {
+                        // Fallback: use entire string as title if price parsing fails
+                        listings.add(new EbayListingInfo(titleAndPrice, ""));
+                    }
+                }
+            }
+        }
+        
+        return listings;
     }
     
     /**

@@ -44,7 +44,7 @@ public class WebDriverService {
                             .executeScript("return document.readyState").equals("complete"));
             
             // Random delay to simulate human behavior
-            Thread.sleep(ThreadLocalRandom.current().nextInt(1000, 3000));
+            Thread.sleep(ThreadLocalRandom.current().nextInt(600, 1800));  // Reduced by 40% from 1000-3000ms
             
         } catch (Exception e) {
             log.error("Failed to navigate to URL: {}", url, e);
@@ -94,19 +94,29 @@ public class WebDriverService {
         try {
             JavascriptExecutor js = (JavascriptExecutor) driver;
             
-            // Get page height
+            // Get current scroll position and page height
+            Long currentScroll = (Long) js.executeScript("return window.pageYOffset");
             Long pageHeight = (Long) js.executeScript("return document.body.scrollHeight");
+            Long viewportHeight = (Long) js.executeScript("return window.innerHeight");
             
-            // Scroll down in chunks
-            for (int i = 0; i < 3; i++) {
-                int scrollY = ThreadLocalRandom.current().nextInt(300, 800);
-                js.executeScript("window.scrollBy(0, " + scrollY + ")");
-                Thread.sleep(ThreadLocalRandom.current().nextInt(500, 1500));
+            // Determine how much to scroll
+            long remainingHeight = pageHeight - currentScroll - viewportHeight;
+            
+            if (remainingHeight > 0) {
+                // Scroll down in natural chunks
+                int scrolls = ThreadLocalRandom.current().nextInt(2, 5);
+                for (int i = 0; i < scrolls; i++) {
+                    int scrollY = ThreadLocalRandom.current().nextInt(300, 600);
+                    js.executeScript("window.scrollBy({top: " + scrollY + ", behavior: 'smooth'})");
+                    Thread.sleep(ThreadLocalRandom.current().nextInt(200, 400));  // Shorter delays for faster scrolling
+                }
+            } else {
+                // We're at the bottom, do a small scroll up and down to trigger any lazy loading
+                js.executeScript("window.scrollBy({top: -200, behavior: 'smooth'})");
+                Thread.sleep(300);  // Reduced by 40% from 500ms
+                js.executeScript("window.scrollBy({top: 300, behavior: 'smooth'})");
+                Thread.sleep(300);  // Reduced by 40% from 500ms
             }
-            
-            // Scroll back to top
-            js.executeScript("window.scrollTo(0, 0)");
-            Thread.sleep(1000);
             
         } catch (Exception e) {
             log.warn("Failed to perform human-like scrolling", e);
@@ -134,7 +144,7 @@ public class WebDriverService {
             try {
                 // Scroll element into view
                 ((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView(true);", element);
-                Thread.sleep(500);
+                Thread.sleep(300);  // Reduced by 40% from 500ms
                 
                 // Try normal click first
                 element.click();
@@ -148,7 +158,7 @@ public class WebDriverService {
                 } catch (Exception jsException) {
                     log.warn("Click attempt {} failed, retrying...", i + 1);
                     try {
-                        Thread.sleep(1000);
+                        Thread.sleep(600);  // Reduced by 40% from 1000ms
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         return false;
@@ -192,7 +202,7 @@ public class WebDriverService {
      */
     public void humanDelay() {
         try {
-            Thread.sleep(ThreadLocalRandom.current().nextInt(1000, 3000));
+            Thread.sleep(ThreadLocalRandom.current().nextInt(600, 1800));  // Reduced by 40% from 1000-3000ms
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -243,7 +253,7 @@ public class WebDriverService {
             // Method 1: JavaScript window.open
             try {
                 ((JavascriptExecutor) driver).executeScript("window.open('about:blank','_blank');");
-                Thread.sleep(1000);
+                Thread.sleep(600);  // Reduced by 40% from 1000ms
                 
                 Set<String> newHandles = driver.getWindowHandles();
                 if (newHandles.size() > originalCount) {
@@ -258,7 +268,7 @@ public class WebDriverService {
             if (!tabOpened) {
                 try {
                     driver.findElement(By.tagName("body")).sendKeys(Keys.CONTROL + "t");
-                    Thread.sleep(1000);
+                    Thread.sleep(600);  // Reduced by 40% from 1000ms
                     
                     Set<String> newHandles = driver.getWindowHandles();
                     if (newHandles.size() > originalCount) {
@@ -276,7 +286,7 @@ public class WebDriverService {
                     ((JavascriptExecutor) driver).executeScript(
                         "var newTab = window.open(); newTab.document.write('<html><body>Loading...</body></html>');"
                     );
-                    Thread.sleep(1000);
+                    Thread.sleep(600);  // Reduced by 40% from 1000ms
                     
                     Set<String> newHandles = driver.getWindowHandles();
                     if (newHandles.size() > originalCount) {
@@ -333,7 +343,7 @@ public class WebDriverService {
             // Method 1: Try to open tab directly with URL
             try {
                 ((JavascriptExecutor) driver).executeScript("window.open(arguments[0], '_blank');", url);
-                Thread.sleep(2000);
+                Thread.sleep(1200);  // Reduced by 40% from 2000ms
                 
                 // Switch to the new tab
                 Set<String> handles = driver.getWindowHandles();
@@ -362,7 +372,7 @@ public class WebDriverService {
                 // Use JavaScript navigation instead of driver.get()
                 try {
                     ((JavascriptExecutor) driver).executeScript("window.location.href = arguments[0];", url);
-                    Thread.sleep(3000);
+                    Thread.sleep(1800);  // Reduced by 40% from 3000ms
                     
                     String currentUrl = driver.getCurrentUrl();
                     log.info("After JS navigation, current URL: {}", currentUrl);

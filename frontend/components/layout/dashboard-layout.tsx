@@ -16,7 +16,8 @@ import {
   Zap,
   Menu,
   X,
-  FileText
+  FileText,
+  TrendingUp
 } from "lucide-react"
 
 const navigation = [
@@ -29,6 +30,11 @@ const navigation = [
     name: "Marketplace",
     href: "/marketplace",
     icon: ShoppingCart,
+  },
+  {
+    name: "eBay Price Analysis",
+    href: "/ebay-price",
+    icon: TrendingUp,
   },
   {
     name: "CSV Analysis",

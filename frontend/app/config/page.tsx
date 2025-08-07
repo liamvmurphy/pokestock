@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
+import { getApiBaseUrl } from "@/lib/api"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -45,7 +46,7 @@ export default function ConfigPage() {
 
   // Send initial model configuration to backend on load
   useEffect(() => {
-    fetch('http://localhost:8080/api/marketplace/configure', {
+    fetch(`${getApiBaseUrl()}/api/marketplace/configure`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -65,7 +66,7 @@ export default function ConfigPage() {
     
     // If LM Studio model changed, update marketplace configuration
     if (section === 'lmStudio' && field === 'model') {
-      fetch('http://localhost:8080/api/marketplace/configure', {
+      fetch(`${getApiBaseUrl()}/api/marketplace/configure`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -83,7 +84,7 @@ export default function ConfigPage() {
       await new Promise(resolve => setTimeout(resolve, 2000))
       
       if (service === 'lmStudio') {
-        const response = await fetch('http://localhost:8080/api/test/health')
+        const response = await fetch(`${getApiBaseUrl()}/api/test/health`)
         const data = await response.json()
         setTestResults(prev => ({ 
           ...prev, 
@@ -206,7 +207,7 @@ export default function ConfigPage() {
                     variant="outline"
                     onClick={async () => {
                       try {
-                        const response = await fetch('http://localhost:8080/api/test/current-model')
+                        const response = await fetch(`${getApiBaseUrl()}/api/test/current-model`)
                         const data = await response.json()
                         alert(`Default Model: ${data.defaultModel}\nActive Model: ${data.activeModel}`)
                       } catch (error) {

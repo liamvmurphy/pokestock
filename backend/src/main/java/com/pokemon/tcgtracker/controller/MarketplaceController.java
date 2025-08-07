@@ -42,15 +42,9 @@ public class MarketplaceController {
     @PostMapping("/start")
     public ResponseEntity<Map<String, Object>> startMonitoring() {
         try {
-            // Run monitoring for 2 search terms only
-            List<String> searchTerms = List.of(
-                "Pokemon ETB",
-                "Pokemon Elite Trainer Box"
-            );
-            
             CompletableFuture.runAsync(() -> {
                 try {
-                    log.info("Starting Facebook Marketplace monitoring with multi-tab support");
+                    log.info("Starting Facebook Marketplace monitoring");
                     facebookMarketplaceService.startMarketplaceMonitoring();
                     log.info("Completed Facebook Marketplace monitoring");
                 } catch (Exception e) {
@@ -58,10 +52,14 @@ public class MarketplaceController {
                 }
             });
 
+            // Get the actual search terms used by the service
+            Map<String, Object> serviceStatus = facebookMarketplaceService.getMonitoringStatus();
+            List<String> actualSearchTerms = (List<String>) serviceStatus.get("searchTerms");
+
             Map<String, Object> response = new HashMap<>();
             response.put("message", "Marketplace monitoring started");
             response.put("status", "running");
-            response.put("searchTerms", searchTerms);
+            response.put("searchTerms", actualSearchTerms);
             response.put("timestamp", System.currentTimeMillis());
             
             return ResponseEntity.ok(response);
@@ -136,11 +134,10 @@ public class MarketplaceController {
     @GetMapping("/search-terms")
     public ResponseEntity<Map<String, Object>> getSearchTerms() {
         Map<String, Object> response = new HashMap<>();
-        response.put("searchTerms", List.of(
-            "pokemon etb", 
-            "pokemon elite trainer box",
-            "pokemon booster box"
-        ));
+        // Get the actual search terms from the service to ensure consistency
+        Map<String, Object> serviceStatus = facebookMarketplaceService.getMonitoringStatus();
+        List<String> searchTerms = (List<String>) serviceStatus.get("searchTerms");
+        response.put("searchTerms", searchTerms);
         return ResponseEntity.ok(response);
     }
 

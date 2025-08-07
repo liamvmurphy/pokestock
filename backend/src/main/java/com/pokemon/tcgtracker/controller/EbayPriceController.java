@@ -61,6 +61,10 @@ public class EbayPriceController {
             // Convert marketplace data to the format expected by eBay service
             List<Map<String, String>> csvData = convertMarketplaceDataToCsvFormat(marketplaceData);
             
+            // Log data integrity checkpoint
+            System.out.println(String.format("🔍 Starting eBay price search for %d Facebook Marketplace items. " +
+                "Data integrity validation will ensure 1:1 row correspondence.", csvData.size()));
+            
             // Search eBay prices
             Map<String, Object> result = ebayPriceService.searchEbayPrices(csvData);
             

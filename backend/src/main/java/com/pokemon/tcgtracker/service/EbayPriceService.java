@@ -30,6 +30,9 @@ public class EbayPriceService {
         Map<String, Object> result = new HashMap<>();
         List<Map<String, Object>> searchResults = new ArrayList<>();
         
+        // Log input data info for validation tracking
+        logger.info("🔍 Processing eBay price search for {} items from Facebook Marketplace", csvData.size());
+        
         WebDriver driver = null;
         try {
             driver = webDriverService.getWebDriver();
@@ -83,7 +86,7 @@ public class EbayPriceService {
                     driver.get(ebayUrl);
                     
                     // Wait for results to load
-                    Thread.sleep(2000);
+                    Thread.sleep(1200);  // Reduced by 40% from 2000ms
                     
                     // Extract prices and listing details from the specified div
                     Map<String, Object> ebayData = extractEbayData(driver, wait, searchNameWithLanguage);
@@ -135,7 +138,7 @@ public class EbayPriceService {
                     searchCount++; // Increment counter after successful search
                     
                     // Small delay between searches
-                    Thread.sleep(1000);
+                    Thread.sleep(600);  // Reduced by 40% from 1000ms
                     
                 } catch (Exception e) {
                     logger.error("Error searching for item: " + itemName, e);

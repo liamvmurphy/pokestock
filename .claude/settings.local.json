@@ -56,7 +56,9 @@
       "Bash(sdk install:*)",
       "Bash(npm run build:*)",
       "Bash(npx eslint:*)",
-      "Bash(kill:*)"
+      "Bash(kill:*)",
+      "Bash(echo $JAVA_HOME)",
+      "Bash(python3:*)"
     ],
     "deny": []
   }

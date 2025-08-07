@@ -52,7 +52,7 @@ export default function MarketplacePage() {
       setLoading(true)
       console.log('Attempting to fetch listings from API...')
       
-      const response = await fetch(apiEndpoints.marketplace.listings)
+      const response = await fetch(apiEndpoints.marketplace.listings())
       console.log('API Response status:', response.status)
       
       if (response.ok) {
@@ -125,7 +125,7 @@ export default function MarketplacePage() {
     setLoading(true)
     try {
       console.log('Starting marketplace monitoring...')
-      const response = await fetch(apiEndpoints.marketplace.start, {
+      const response = await fetch(apiEndpoints.marketplace.start(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -158,7 +158,7 @@ export default function MarketplacePage() {
 
   const checkMonitoringStatus = async () => {
     try {
-      const response = await fetch(apiEndpoints.marketplace.status)
+      const response = await fetch(apiEndpoints.marketplace.status())
       if (response.ok) {
         const data = await response.json()
         setMonitoring(data.running || false)

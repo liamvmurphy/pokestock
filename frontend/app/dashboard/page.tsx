@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { getApiBaseUrl } from "@/lib/api"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -45,7 +46,7 @@ export default function Dashboard() {
 
   const fetchStatus = async () => {
     try {
-      const response = await fetch('http://localhost:8080/api/test/health')
+      const response = await fetch(`${getApiBaseUrl()}/api/test/health`)
       const data = await response.json()
       setSystemStatus(data)
     } catch (error) {
@@ -57,7 +58,7 @@ export default function Dashboard() {
 
   const fetchModels = async () => {
     try {
-      const response = await fetch('http://localhost:8080/api/test/models')
+      const response = await fetch(`${getApiBaseUrl()}/api/test/models`)
       const data = await response.json()
       setAvailableModels(data)
       // Set default model if available
@@ -84,7 +85,7 @@ export default function Dashboard() {
         price: (Math.random() * 100 + 50).toFixed(2)
       }
       
-      const response = await fetch('http://localhost:8080/api/test/test-marketplace', {
+      const response = await fetch(`${getApiBaseUrl()}/api/test/test-marketplace`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(testData)
@@ -111,7 +112,7 @@ export default function Dashboard() {
     try {
       console.log('Starting scalable marketplace scraping...')
       
-      const response = await fetch('http://localhost:8080/api/marketplace/scrape', {
+      const response = await fetch(`${getApiBaseUrl()}/api/marketplace/scrape`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -159,7 +160,7 @@ export default function Dashboard() {
       formData.append('description', 'Facebook Marketplace listing. Analyze this screenshot.')
       formData.append('model', selectedModel)
       
-      const response = await fetch('http://localhost:8080/api/test/analyze-image', {
+      const response = await fetch(`${getApiBaseUrl()}/api/test/analyze-image`, {
         method: 'POST',
         body: formData
       })

@@ -16,6 +16,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.openqa.selenium.JavascriptExecutor;
 import java.util.stream.Collectors;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.openqa.selenium.support.ui.ExpectedConditions;
@@ -37,19 +38,25 @@ public class FacebookMarketplaceService {
     private static final long CACHE_REFRESH_HOURS = 1; // Refresh cache every hour
     
     // Configurable timing parameters for optimization
-    private static final Duration DEFAULT_PAGE_LOAD_TIMEOUT = Duration.ofSeconds(10);
-    private static final Duration DEFAULT_SCROLL_WAIT_TIMEOUT = Duration.ofSeconds(5);
-    private static final Duration DEFAULT_LISTING_LOAD_TIMEOUT = Duration.ofSeconds(8);
-    private static final Duration DEFAULT_ELEMENT_WAIT_TIMEOUT = Duration.ofSeconds(2);
+    private static final Duration DEFAULT_PAGE_LOAD_TIMEOUT = Duration.ofSeconds(6);  // Reduced by 40% from 10s
+    private static final Duration DEFAULT_SCROLL_WAIT_TIMEOUT = Duration.ofSeconds(3);  // Reduced by 40% from 5s
+    private static final Duration DEFAULT_LISTING_LOAD_TIMEOUT = Duration.ofSeconds(5);  // Reduced by 37.5% from 8s
+    private static final Duration DEFAULT_ELEMENT_WAIT_TIMEOUT = Duration.ofSeconds(1);  // Reduced by 50% from 2s
 
     private static final String MARKETPLACE_BASE_URL = "https://www.facebook.com/marketplace";
     private static final Pattern PRICE_PATTERN = Pattern.compile("\\$([0-9,]+(?:\\.[0-9]{2})?)");
     
-    // Pokemon TCG search terms
+    // Pokemon TCG search terms - includes high-value discontinued sets
     private static final List<String> SEARCH_TERMS = Arrays.asList(
         "Pokemon ETB",
         "Pokemon Elite Trainer Box",
-        "Pokemon Booster Box"
+        "Pokemon Booster Box",
+        "Pokemon Evolving Skies",
+        "Pokemon Lost Origin",
+        "Pokemon Brilliant Stars",
+        "Pokemon GO Cards",
+        "Pokemon Hidden Fates",
+        "Pokemon Celebrations"
     );
 
     /**
@@ -63,6 +70,8 @@ public class FacebookMarketplaceService {
         try {
             driver = webDriverService.getWebDriver();
             log.info("🚀 Starting Facebook Marketplace monitoring with {} search terms", SEARCH_TERMS.size());
+            
+            // Note: eBay data is now stored in the same sheet, so no need to clear it separately
             
             // Process all search terms sequentially in a single tab
             for (int i = 0; i < SEARCH_TERMS.size(); i++) {
@@ -116,16 +125,55 @@ public class FacebookMarketplaceService {
         List<Map<String, Object>> listings = new ArrayList<>();
         
         try {
-            // Scroll to load more listings
-            webDriverService.humanLikeScroll(driver);
-            waitForScrollContent(driver);
+            // Target 50 items per search
+            final int TARGET_ITEMS = 50;
+            List<String> allListingUrls = new ArrayList<>();
+            Set<String> seenUrls = new HashSet<>();
+            int scrollAttempts = 0;
+            final int MAX_SCROLL_ATTEMPTS = 15; // Prevent infinite scrolling
             
-            // Find all listing URLs on the search results page
-            List<String> listingUrls = collectListingUrls(driver);
-            log.info("📋 Found {} listing URLs for '{}'", listingUrls.size(), searchTerm);
+            log.info("🎯 Target: Collect {} items for search term '{}'", TARGET_ITEMS, searchTerm);
             
-            // Filter and deduplicate URLs upfront
-            List<String> urlsToProcess = filterAndDeduplicateUrls(listingUrls, 15);
+            // Continue scrolling until we have enough unique URLs or hit max attempts
+            while (allListingUrls.size() < TARGET_ITEMS && scrollAttempts < MAX_SCROLL_ATTEMPTS) {
+                // Scroll to load more listings
+                webDriverService.humanLikeScroll(driver);
+                waitForScrollContent(driver);
+                
+                // Collect new listing URLs
+                List<String> newUrls = collectListingUrls(driver);
+                
+                // Add only unique URLs
+                int beforeCount = allListingUrls.size();
+                for (String url : newUrls) {
+                    if (seenUrls.add(url)) {
+                        allListingUrls.add(url);
+                    }
+                }
+                int afterCount = allListingUrls.size();
+                
+                log.info("📜 Scroll attempt {}: Found {} new unique URLs. Total: {}/{}", 
+                        scrollAttempts + 1, afterCount - beforeCount, afterCount, TARGET_ITEMS);
+                
+                // If we didn't find any new URLs, we might have reached the end
+                if (afterCount == beforeCount) {
+                    log.info("⚠️ No new listings found on scroll. May have reached end of results.");
+                    webDriverService.humanDelay(); // Wait a bit before next attempt
+                }
+                
+                scrollAttempts++;
+                
+                // Scroll to bottom to trigger lazy loading
+                JavascriptExecutor js = (JavascriptExecutor) driver;
+                js.executeScript("window.scrollTo(0, document.body.scrollHeight)");
+                Thread.sleep(800); // Wait for content to load
+            }
+            
+            log.info("📋 Collected {} total listing URLs for '{}' after {} scroll attempts", 
+                    allListingUrls.size(), searchTerm, scrollAttempts);
+            
+            // Filter and deduplicate URLs upfront - use all collected URLs up to our target
+            List<String> urlsToProcess = filterAndDeduplicateUrls(allListingUrls, TARGET_ITEMS);
             log.info("📝 After filtering: {} URLs to process for '{}'", urlsToProcess.size(), searchTerm);
             
             // Process URLs in batch without returning to search results each time

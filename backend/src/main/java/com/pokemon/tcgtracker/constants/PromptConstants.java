@@ -10,6 +10,8 @@ public class PromptConstants {
 
         ## Data Understanding
         The CSV contains Pokemon TCG marketplace listings with these key columns:
+        
+        **Facebook Marketplace Data:**
         - **Item Name**: Product description (often messy/inconsistent)
         - **Set**: Pokemon set (often missing/incorrect)
         - **Product Type**: ETB, Booster Box, Tin, Bundle, etc.
@@ -18,6 +20,13 @@ public class PromptConstants {
         - **Location**: Melbourne, VIC areas
         - **Notes**: Additional seller notes
         - **Marketplace URL**: Facebook marketplace links
+        
+        **eBay Market Intelligence (when available):**
+        - **eBay Median Price**: Median price from recent eBay sold listings (AUD)
+        - **eBay Listing 1-5 Title**: Titles of the 5 most recent comparable eBay sales
+        - **eBay Listing 1-5 Price**: Actual sold prices from eBay (provides real market validation)
+        
+        **CRITICAL: eBay data represents ACTUAL SOLD PRICES, not asking prices. Use this as ground truth for market values.**
 
         ## Analysis Requirements
 
@@ -38,12 +47,22 @@ public class PromptConstants {
         - Japanese indicators: "japanese", "japan", "jp" in name/notes
 
         ### 2. Market Value Analysis
-        **Establish Fair Market Prices (AUD):**
-        - Elite Trainer Box: $120-180 (English), $100-150 (Japanese)
-        - Booster Box: $160-280 (English), $130-250 (Japanese)
-        - Mini Tins: $20-35
-        - Premium/Special sets: 20-50% above standard pricing
-        - Vintage/rare sets: Significantly higher premiums
+        **PRIORITY ORDER for Market Value Determination:**
+        
+        1. **eBay Median Price (HIGHEST PRIORITY)**: When available, use eBay median as primary market reference
+        2. **eBay Listing Analysis**: Analyze the 5 recent eBay sales for price trends and validation
+        3. **Fallback Guidelines**: Use these only when eBay data is unavailable:
+           - Elite Trainer Box: $120-180 (English), $100-150 (Japanese)
+           - Booster Box: $160-280 (English), $130-250 (Japanese)
+           - Mini Tins: $20-35
+           - Premium/Special sets: 20-50% above standard pricing
+           - Vintage/rare sets: Significantly higher premiums
+        
+        **eBay Analysis Instructions:**
+        - Compare Facebook price vs eBay median to determine real deal quality
+        - Look for price consistency across the 5 eBay listings
+        - Flag any significant price disparities in eBay data (could indicate market volatility)
+        - Use eBay listing titles to verify product matching accuracy
 
         ### 3. Deal Scoring System (1-5 Scale)
         **Score 5 - Exceptional Deal (Buy Immediately):**
@@ -77,10 +96,11 @@ public class PromptConstants {
         1. **Cleaned Product Name** (standardized format)
         2. **Identified Set** (official set name)
         3. **Language** (English/Japanese)
-        4. **Market Value Estimate** (AUD range)
-        5. **Deal Score** (1-5)
-        6. **Recommendation Notes** (detailed reasoning)
-        7. **Action Priority** (immediate/soon/monitor/avoid)
+        4. **Market Value Estimate** (prioritize eBay median when available)
+        5. **Deal Score** (1-5) - based on Facebook price vs eBay median when available
+        6. **eBay Market Validation** (if eBay data present: median price, price range, consistency)
+        7. **Recommendation Notes** (detailed reasoning including eBay comparison)
+        8. **Action Priority** (immediate/soon/monitor/avoid)
 
         **Overall Market Insights:**
         - Best deals currently available (top 10)
@@ -127,10 +147,11 @@ public class PromptConstants {
         | **Attribute** | **Details** |
         |---------------|-------------|
         | **Set** | [Official Set Name] |
-        | **Price** | $[Current] AUD |
-        | **Market Value** | $[Estimated Range] AUD |
+        | **Facebook Price** | $[Current] AUD |
+        | **eBay Median** | $[eBay Median] AUD (or "N/A" if no eBay data) |
+        | **Market Value** | $[Best Available Estimate] AUD |
         | **Deal Score** | [1-5]/5 ⭐ |
-        | **Savings** | [X]% below market value |
+        | **Savings** | [X]% below market value (vs eBay when available) |
         | **Action** | [IMMEDIATE BUY/BUY SOON/MONITOR/AVOID] |
         | **Investment Grade** | [EXCEPTIONAL/GREAT/GOOD/FAIR/POOR] |
         | **Language** | [English/Japanese/Other] |
@@ -138,11 +159,13 @@ public class PromptConstants {
         | **Quantity Available** | [X] units |
         | **Location** | [Melbourne area] |
         
-        **📊 Analysis:** [2-3 sentences on why this is a good deal]
+        **📊 Analysis:** [2-3 sentences on why this is a good deal, include eBay comparison when available]
         
-        **⚠️ Risks:** [Any concerns or red flags]
+        **🎯 eBay Validation:** [If eBay data available: "Recent eBay sales: $X, $Y, $Z, $A, $B - shows consistent/volatile market"]
         
-        **💰 Potential:** [Resale potential and timeline]
+        **⚠️ Risks:** [Any concerns or red flags, including eBay price discrepancies]
+        
+        **💰 Potential:** [Resale potential and timeline, factor in eBay market data]
         
         **🔗 URL:** [View Listing](https://facebook.com/marketplace/item/123456)
         ```
@@ -157,10 +180,12 @@ public class PromptConstants {
         - Japanese vs English value comparison
 
         ### Market Intelligence
-        - Price distribution analysis
+        - Price distribution analysis (Facebook vs eBay comparison when available)
+        - eBay market trends and validation patterns
         - Geographic hotspots
         - Seller behavior patterns
         - Timing recommendations
+        - Cross-platform arbitrage opportunities
 
         ### Red Flags & Warnings
         - Listings to avoid

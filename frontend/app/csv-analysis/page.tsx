@@ -59,7 +59,7 @@ export default function CSVAnalysisPage() {
   // Check marketplace data count on component mount
   const checkMarketplaceData = async () => {
     try {
-      const response = await fetch(apiEndpoints.marketplace.listings)
+      const response = await fetch(apiEndpoints.marketplace.listings())
       const result = await response.json()
       
       if (result.allListings) {
@@ -73,7 +73,7 @@ export default function CSVAnalysisPage() {
   // Check Google Sheets status and capabilities
   const checkGoogleSheetsStatus = async () => {
     try {
-      const response = await fetch(apiEndpoints.csv.googleSheetsInfo)
+      const response = await fetch(apiEndpoints.csv.googleSheetsInfo())
       const result = await response.json()
       
       if (result.success && result.available) {
@@ -97,7 +97,7 @@ export default function CSVAnalysisPage() {
     setHasCheckedForReports(true) // Prevent multiple calls
     
     try {
-      const response = await fetch(apiEndpoints.csv.lastReport)
+      const response = await fetch(apiEndpoints.csv.lastReport())
       const result = await response.json()
       
       if (result.success && result.report) {
@@ -130,7 +130,7 @@ export default function CSVAnalysisPage() {
     setHasCheckedForReports(false) // Allow checking for reports again after new analysis
 
     try {
-      const response = await fetch(apiEndpoints.csv.autoAnalyze, {
+      const response = await fetch(apiEndpoints.csv.autoAnalyze(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
