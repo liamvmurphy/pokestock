@@ -565,6 +565,45 @@ public class GoogleSheetsService {
     }
     
     /**
+     * Get marketplace data in CSV format for eBay processing
+     */
+    public List<Map<String, String>> getMarketplaceDataAsCsv() throws IOException {
+        List<Map<String, Object>> marketplaceData = getAllMarketplaceListings();
+        List<Map<String, String>> csvData = new ArrayList<>();
+        
+        for (Map<String, Object> marketplaceItem : marketplaceData) {
+            Map<String, String> csvItem = new HashMap<>();
+            
+            // Map marketplace data to CSV format expected by eBay service
+            csvItem.put("Item Name", getString(marketplaceItem, "itemName"));
+            csvItem.put("Set", getString(marketplaceItem, "set"));
+            csvItem.put("Product Type", getString(marketplaceItem, "productType"));
+            csvItem.put("Price", getString(marketplaceItem, "price"));
+            csvItem.put("Quantity", getString(marketplaceItem, "quantity"));
+            csvItem.put("Notes", getString(marketplaceItem, "notes"));
+            csvItem.put("Language", getString(marketplaceItem, "language"));
+            csvItem.put("Marketplace URL", getString(marketplaceItem, "marketplaceUrl"));
+            
+            // Include eBay data if available (for proper filtering)
+            csvItem.put("eBay Search Date", getString(marketplaceItem, "ebaySearchDate"));
+            csvItem.put("eBay Median Price", getString(marketplaceItem, "ebayMedianPrice"));
+            csvItem.put("eBay Result Count", getString(marketplaceItem, "ebayResultCount"));
+            csvItem.put("eBay Listing Details", getString(marketplaceItem, "ebayListingDetails"));
+            csvItem.put("eBay All Prices", getString(marketplaceItem, "ebayAllPrices"));
+            csvItem.put("eBay Top 5 Prices", getString(marketplaceItem, "ebayTop5Prices"));
+            
+            csvData.add(csvItem);
+        }
+        
+        return csvData;
+    }
+    
+    private String getString(Map<String, Object> map, String key) {
+        Object value = map.get(key);
+        return value != null ? value.toString() : "";
+    }
+    
+    /**
      * Save market intelligence report as a new sheet tab
      */
     public String saveMarketIntelligenceReport(String reportContent, int totalListings) {
@@ -679,7 +718,7 @@ public class GoogleSheetsService {
     }
     
     /**
-     * Update Facebook Marketplace sheet with eBay price data (1:1 row correspondence)
+     * Update Facebook Marketplace sheet with eBay price data by matching item names
      */
     public String saveEbayPriceData(List<Map<String, Object>> searchResults) throws IOException {
         if (spreadsheetId == null || spreadsheetId.isEmpty()) {
@@ -702,76 +741,121 @@ public class GoogleSheetsService {
                 throw new IllegalStateException("No marketplace data available for eBay price update");
             }
             
-            // Verify we have the same number of results as marketplace rows (excluding header)
-            int marketplaceRowCount = values.size() - 1; // Subtract header
-            if (searchResults.size() != marketplaceRowCount) {
-                log.warn("eBay results count ({}) doesn't match marketplace rows ({})", 
-                        searchResults.size(), marketplaceRowCount);
+            // Get header row to identify column positions
+            List<Object> headers = values.get(0);
+            int itemNameCol = -1;
+            int ebaySearchDateCol = -1;
+            int ebayMedianCol = -1;
+            
+            for (int i = 0; i < headers.size(); i++) {
+                String header = headers.get(i).toString();
+                if ("Item Name".equals(header)) itemNameCol = i;
+                else if ("eBay Search Date".equals(header)) ebaySearchDateCol = i;
+                else if ("eBay Median Price".equals(header)) ebayMedianCol = i;
+            }
+            
+            if (itemNameCol == -1) {
+                log.error("Could not find 'Item Name' column in spreadsheet");
+                throw new IllegalStateException("Item Name column not found");
             }
             
             // Prepare batch update data for eBay columns (columns N-S, 1-based index 14-19)
             List<ValueRange> batchData = new ArrayList<>();
+            int updatedCount = 0;
             
-            for (int i = 0; i < searchResults.size() && i < marketplaceRowCount; i++) {
-                Map<String, Object> ebayResult = searchResults.get(i);
-                int rowIndex = i + 2; // +2 because sheets are 1-indexed and we skip header
-                
-                // Prepare eBay data for this row
-                List<Object> ebayData = new ArrayList<>();
-                ebayData.add(timestamp); // eBay Search Date
-                ebayData.add(ebayResult.getOrDefault("medianPrice", "")); // eBay Median Price
-                ebayData.add(ebayResult.getOrDefault("resultCount", "0")); // eBay Result Count
-                
-                // Convert listing details list to string
-                Object listingDetailsObj = ebayResult.get("listingDetails");
-                String listingDetailsStr = "";
-                if (listingDetailsObj instanceof List) {
-                    listingDetailsStr = ((List<?>) listingDetailsObj).stream()
-                        .map(String::valueOf)
-                        .collect(Collectors.joining(" | "));
+            // For each eBay search result, find matching rows in the spreadsheet
+            for (Map<String, Object> ebayResult : searchResults) {
+                String searchResultItemName = (String) ebayResult.get("originalName");
+                if (searchResultItemName == null || searchResultItemName.trim().isEmpty()) {
+                    continue;
                 }
-                ebayData.add(listingDetailsStr); // eBay Listing Details
                 
-                // Convert all prices to string
-                Object allPricesObj = ebayResult.get("allPrices");
-                String allPricesStr = "";
-                if (allPricesObj instanceof List) {
-                    allPricesStr = ((List<?>) allPricesObj).stream()
-                        .map(String::valueOf)
-                        .collect(Collectors.joining(","));
+                // Find all rows in the spreadsheet that match this item name
+                for (int rowIdx = 1; rowIdx < values.size(); rowIdx++) { // Skip header row
+                    List<Object> row = values.get(rowIdx);
+                    if (row.size() <= itemNameCol) continue;
+                    
+                    String sheetItemName = row.get(itemNameCol).toString();
+                    if (searchResultItemName.equals(sheetItemName)) {
+                        // Check if this row already has eBay data
+                        boolean hasExistingEbayData = false;
+                        if (ebayMedianCol >= 0 && row.size() > ebayMedianCol) {
+                            String existingMedian = row.get(ebayMedianCol).toString().trim();
+                            hasExistingEbayData = !existingMedian.isEmpty();
+                        }
+                        
+                        // Skip if already has data (don't overwrite)
+                        if (hasExistingEbayData) {
+                            log.debug("Skipping row {} - already has eBay data: {}", rowIdx + 1, sheetItemName);
+                            continue;
+                        }
+                        
+                        // Prepare eBay data for this row
+                        List<Object> ebayData = new ArrayList<>();
+                        ebayData.add(timestamp); // eBay Search Date
+                        ebayData.add(ebayResult.getOrDefault("medianPrice", "")); // eBay Median Price
+                        ebayData.add(ebayResult.getOrDefault("resultCount", "0")); // eBay Result Count
+                        
+                        // Convert listing details list to string
+                        Object listingDetailsObj = ebayResult.get("listingDetails");
+                        String listingDetailsStr = "";
+                        if (listingDetailsObj instanceof List) {
+                            listingDetailsStr = ((List<?>) listingDetailsObj).stream()
+                                .map(String::valueOf)
+                                .collect(Collectors.joining(" | "));
+                        }
+                        ebayData.add(listingDetailsStr); // eBay Listing Details
+                        
+                        // Convert all prices to string
+                        Object allPricesObj = ebayResult.get("allPrices");
+                        String allPricesStr = "";
+                        if (allPricesObj instanceof List) {
+                            allPricesStr = ((List<?>) allPricesObj).stream()
+                                .map(String::valueOf)
+                                .collect(Collectors.joining(","));
+                        }
+                        ebayData.add(allPricesStr); // eBay All Prices
+                        
+                        // Convert top 5 prices to string
+                        Object top5PricesObj = ebayResult.get("top5Prices");
+                        String top5PricesStr = "";
+                        if (top5PricesObj instanceof List) {
+                            top5PricesStr = ((List<?>) top5PricesObj).stream()
+                                .map(String::valueOf)
+                                .collect(Collectors.joining(","));
+                        }
+                        ebayData.add(top5PricesStr); // eBay Top 5 Prices
+                        
+                        // Create range for this row's eBay columns (N-S)
+                        int googleRowNum = rowIdx + 1; // Google Sheets is 1-indexed
+                        String updateRange = String.format("%s!N%d:S%d", MARKETPLACE_SHEET, googleRowNum, googleRowNum);
+                        ValueRange valueRange = new ValueRange()
+                                .setRange(updateRange)
+                                .setValues(Arrays.asList(ebayData));
+                        
+                        batchData.add(valueRange);
+                        updatedCount++;
+                        
+                        log.debug("✅ Prepared update for row {} - item: {}", googleRowNum, sheetItemName);
+                    }
                 }
-                ebayData.add(allPricesStr); // eBay All Prices
-                
-                // Convert top 5 prices to string
-                Object top5PricesObj = ebayResult.get("top5Prices");
-                String top5PricesStr = "";
-                if (top5PricesObj instanceof List) {
-                    top5PricesStr = ((List<?>) top5PricesObj).stream()
-                        .map(String::valueOf)
-                        .collect(Collectors.joining(","));
-                }
-                ebayData.add(top5PricesStr); // eBay Top 5 Prices
-                
-                // Create range for this row's eBay columns (N-S)
-                String updateRange = String.format("%s!N%d:S%d", MARKETPLACE_SHEET, rowIndex, rowIndex);
-                ValueRange valueRange = new ValueRange()
-                        .setRange(updateRange)
-                        .setValues(Arrays.asList(ebayData));
-                
-                batchData.add(valueRange);
             }
             
-            // Execute batch update
-            BatchUpdateValuesRequest batchRequest = new BatchUpdateValuesRequest()
-                    .setValueInputOption("RAW")
-                    .setData(batchData);
-            
-            BatchUpdateValuesResponse batchResponse = sheetsService.spreadsheets().values()
-                    .batchUpdate(spreadsheetId, batchRequest)
-                    .execute();
-            
-            log.info("✅ Successfully updated {} rows in Facebook Marketplace sheet with eBay data", 
-                    batchData.size());
+            // Execute batch update only if we have data to update
+            if (!batchData.isEmpty()) {
+                BatchUpdateValuesRequest batchRequest = new BatchUpdateValuesRequest()
+                        .setValueInputOption("RAW")
+                        .setData(batchData);
+                
+                BatchUpdateValuesResponse batchResponse = sheetsService.spreadsheets().values()
+                        .batchUpdate(spreadsheetId, batchRequest)
+                        .execute();
+                
+                log.info("✅ Successfully updated {} rows in Facebook Marketplace sheet with eBay data by name matching", 
+                        updatedCount);
+            } else {
+                log.info("⚠️ No rows to update - all matching items already have eBay data");
+            }
             
             // Delete any old eBay price sheets since we no longer need them
             try {
@@ -827,6 +911,7 @@ public class GoogleSheetsService {
                     if (row.size() > 3) item.put("productType", row.get(3).toString());
                     if (row.size() > 4) item.put("facebookPrice", row.get(4).toString()); // Price
                     if (row.size() > 7) item.put("language", row.get(7).toString());
+                    if (row.size() > 11) item.put("marketplaceUrl", row.get(11).toString()); // Marketplace URL
                     
                     // eBay data from extended columns
                     if (row.size() > 13) item.put("searchTime", row.get(13).toString()); // eBay Search Date
@@ -844,6 +929,30 @@ public class GoogleSheetsService {
             }
             
             log.info("Retrieved {} eBay price records from Facebook Marketplace sheet", data.size());
+            
+            // Filter out items with unrealistic profit margins (off by 75% or more)
+            data = data.stream()
+                .filter(item -> {
+                    double profitMarginPercent = calculateProfitMarginPercent(item.get("facebookPrice"), item.get("ebayMedian"));
+                    boolean isRealistic = Math.abs(profitMarginPercent) <= 75.0;
+                    if (!isRealistic) {
+                        log.debug("Filtering out item with unrealistic profit margin {}%: {}", 
+                                profitMarginPercent, item.get("originalName"));
+                    }
+                    return isRealistic;
+                })
+                .collect(Collectors.toList());
+            
+            log.info("After filtering unrealistic margins: {} records remaining", data.size());
+            
+            // Sort by profit potential (eBay median - Facebook price), highest first
+            data.sort((a, b) -> {
+                Double profitA = calculateProfitPotential(a.get("facebookPrice"), a.get("ebayMedian"));
+                Double profitB = calculateProfitPotential(b.get("facebookPrice"), b.get("ebayMedian"));
+                return profitB.compareTo(profitA); // Descending order (highest profit first)
+            });
+            
+            log.info("Sorted {} records by profit potential (highest first)", data.size());
             return data;
             
         } catch (IOException e) {
@@ -935,5 +1044,87 @@ public class GoogleSheetsService {
         // Fallback: if no MARKDOWN_CONTENT found, return empty string
         log.warn("No MARKDOWN_CONTENT found in Google Sheets, report formatting may be lost");
         return "";
+    }
+    
+    /**
+     * Calculate profit potential: eBay median price - Facebook price
+     * Returns 0.0 if either price is invalid or missing
+     */
+    private Double calculateProfitPotential(String facebookPriceStr, String ebayMedianStr) {
+        try {
+            if (facebookPriceStr == null || facebookPriceStr.trim().isEmpty() ||
+                ebayMedianStr == null || ebayMedianStr.trim().isEmpty()) {
+                return 0.0;
+            }
+            
+            // Parse Facebook price (remove currency symbols and clean up)
+            double facebookPrice = parsePrice(facebookPriceStr);
+            double ebayMedian = parsePrice(ebayMedianStr);
+            
+            // Return profit potential (can be negative if Facebook price is higher)
+            return ebayMedian - facebookPrice;
+            
+        } catch (Exception e) {
+            log.debug("Failed to calculate profit potential for FB: '{}', eBay: '{}': {}", 
+                     facebookPriceStr, ebayMedianStr, e.getMessage());
+            return 0.0;
+        }
+    }
+    
+    /**
+     * Calculate profit margin percentage to filter out unrealistic matches
+     * Returns the percentage difference between eBay and Facebook prices
+     * Positive means eBay price is higher, negative means Facebook price is higher
+     */
+    private double calculateProfitMarginPercent(String facebookPriceStr, String ebayMedianStr) {
+        try {
+            if (facebookPriceStr == null || facebookPriceStr.trim().isEmpty() ||
+                ebayMedianStr == null || ebayMedianStr.trim().isEmpty()) {
+                return 0.0;
+            }
+            
+            double facebookPrice = parsePrice(facebookPriceStr);
+            double ebayMedian = parsePrice(ebayMedianStr);
+            
+            // Avoid division by zero
+            if (facebookPrice <= 0.0) {
+                return ebayMedian > 0.0 ? 100.0 : 0.0;
+            }
+            
+            // Calculate percentage difference: (eBay - Facebook) / Facebook * 100
+            return ((ebayMedian - facebookPrice) / facebookPrice) * 100.0;
+            
+        } catch (Exception e) {
+            log.debug("Failed to calculate profit margin percent for FB: '{}', eBay: '{}': {}", 
+                     facebookPriceStr, ebayMedianStr, e.getMessage());
+            return 0.0;
+        }
+    }
+    
+    /**
+     * Parse price string, removing currency symbols and handling various formats
+     */
+    private double parsePrice(String priceStr) {
+        if (priceStr == null || priceStr.trim().isEmpty()) {
+            return 0.0;
+        }
+        
+        // Remove currency symbols, spaces, and other non-numeric characters except dots and commas
+        String cleanedPrice = priceStr.replaceAll("[^\\d.,]", "");
+        
+        // Handle comma as thousands separator (e.g., "1,500.00")
+        if (cleanedPrice.contains(",") && cleanedPrice.contains(".")) {
+            cleanedPrice = cleanedPrice.replace(",", "");
+        }
+        // Handle comma as decimal separator (e.g., "15,50")
+        else if (cleanedPrice.contains(",") && !cleanedPrice.contains(".")) {
+            cleanedPrice = cleanedPrice.replace(",", ".");
+        }
+        
+        try {
+            return Double.parseDouble(cleanedPrice);
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
     }
 }

@@ -18,6 +18,66 @@ import java.util.stream.Collectors;
 
 @Service
 public class EbayPriceService {
+    
+    // Global cache for search results to avoid duplicate searches
+    private final Map<String, Map<String, Object>> searchResultsCache = new HashMap<>();
+    
+    /**
+     * Inner class to represent a standardized search query
+     */
+    private static class SearchQuery {
+        private final String originalItemName;
+        private final String cleanedItemName;
+        private final String productType;
+        private final String language;
+        private final String effectiveSearchString;
+        private final List<Map<String, String>> matchingItems;
+        
+        public SearchQuery(String originalItemName, String cleanedItemName, String productType, String language) {
+            this.originalItemName = originalItemName;
+            this.cleanedItemName = cleanedItemName;
+            this.productType = productType;
+            this.language = language;
+            
+            // Build the effective search string
+            StringBuilder sb = new StringBuilder(cleanedItemName);
+            if (productType != null && !productType.trim().isEmpty() && !productType.equals("OTHER")) {
+                sb.append(" ").append(productType);
+            }
+            sb.append(" ").append(language);
+            this.effectiveSearchString = sb.toString();
+            
+            // DEBUG: Log the effective search string to identify grouping issues
+            logger.info("DEBUG SearchQuery: '{}' → '{}'", originalItemName, effectiveSearchString);
+            
+            this.matchingItems = new ArrayList<>();
+        }
+        
+        public String getOriginalItemName() { return originalItemName; }
+        public String getCleanedItemName() { return cleanedItemName; }
+        public String getProductType() { return productType; }
+        public String getLanguage() { return language; }
+        public String getEffectiveSearchString() { return effectiveSearchString; }
+        public List<Map<String, String>> getMatchingItems() { return matchingItems; }
+        
+        public void addMatchingItem(Map<String, String> item) {
+            matchingItems.add(item);
+        }
+        
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            SearchQuery that = (SearchQuery) o;
+            return effectiveSearchString.equals(that.effectiveSearchString);
+        }
+        
+        @Override
+        public int hashCode() {
+            return effectiveSearchString.hashCode();
+        }
+    }
+    
     private static final Logger logger = LoggerFactory.getLogger(EbayPriceService.class);
     
     @Autowired
@@ -28,148 +88,364 @@ public class EbayPriceService {
     
     public Map<String, Object> searchEbayPrices(List<Map<String, String>> csvData) {
         Map<String, Object> result = new HashMap<>();
-        List<Map<String, Object>> searchResults = new ArrayList<>();
+        List<Map<String, Object>> allSearchResults = new ArrayList<>();
         
         // Log input data info for validation tracking
         logger.info("🔍 Processing eBay price search for {} items from Facebook Marketplace", csvData.size());
+        logger.info("📊 Current cache contains {} unique search results", searchResultsCache.size());
+        
+        // Process in batches of 500
+        final int BATCH_SIZE = 500;
+        int totalProcessed = 0;
+        int cacheHits = 0;
         
         WebDriver driver = null;
         try {
             driver = webDriverService.getWebDriver();
             WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10));
             
-            // Fresh search - don't check existing searches, always perform new search
-            
-            // Remove search limit - process all items
-            int searchCount = 0;
-            
-            for (Map<String, String> item : csvData) {
-                String itemName = item.get("Item Name");
-                if (itemName == null || itemName.trim().isEmpty()) continue;
-                
-                // Clean up item name for search
-                String searchName = cleanSearchName(itemName);
-                
-                // Add product type if present
-                String productType = item.get("Product Type");
-                if (productType != null && !productType.trim().isEmpty() && !productType.equals("OTHER")) {
-                    searchName = searchName + " " + productType;
-                }
-                
-                // Detect language and add to search
-                String language = detectLanguage(itemName, item.get("Notes"));
-                String searchNameWithLanguage = searchName + " " + language;
-                
-                // No search limit - process all items - fresh search every time
-                
-                // Skip if not English or Japanese
-                if (!isEnglishOrJapanese(itemName, item.get("Notes"))) {
-                    logger.info("Skipping non-English/Japanese item: {}", itemName);
-                    continue;
-                }
-                
-                Map<String, Object> itemResult = new HashMap<>();
-                itemResult.put("originalName", itemName);
-                itemResult.put("searchName", searchNameWithLanguage);
-                itemResult.put("cleanSearchName", searchName);
-                itemResult.put("language", language);
-                itemResult.put("set", item.get("Set"));
-                itemResult.put("productType", item.get("Product Type"));
-                itemResult.put("facebookPrice", item.get("Price"));
-                
-                try {
-                    // Search eBay sold listings with language included
-                    String encodedSearch = URLEncoder.encode(searchNameWithLanguage, StandardCharsets.UTF_8.toString());
-                    String ebayUrl = String.format("https://www.ebay.com.au/sch/i.html?_nkw=%s&_sacat=&LH_Complete=1&LH_Sold=1", encodedSearch);
-                    
-                    logger.info("Searching eBay for: {}", searchNameWithLanguage);
-                    driver.get(ebayUrl);
-                    
-                    // Wait for results to load
-                    Thread.sleep(1200);  // Reduced by 40% from 2000ms
-                    
-                    // Extract prices and listing details from the specified div
-                    Map<String, Object> ebayData = extractEbayData(driver, wait, searchNameWithLanguage);
-                    List<Double> prices = (List<Double>) ebayData.get("prices");
-                    List<String> listingDetails = (List<String>) ebayData.get("listingDetails");
-                    
-                    if (!prices.isEmpty()) {
-                        // Calculate initial median
-                        double initialMedian = calculateMedian(prices);
-                        
-                        // Filter out prices that are more than 50% above the median
-                        double upperLimit = initialMedian * 1.5;
-                        List<Double> filteredPrices = new ArrayList<>();
-                        List<String> filteredListingDetails = new ArrayList<>();
-                        
-                        for (int i = 0; i < prices.size(); i++) {
-                            if (prices.get(i) <= upperLimit) {
-                                filteredPrices.add(prices.get(i));
-                                filteredListingDetails.add(listingDetails.get(i));
-                            } else {
-                                logger.debug("Filtering out price ${} which is >50% above median ${}", 
-                                    prices.get(i), initialMedian);
-                            }
+            // First, apply any cached results to ALL matching items in the CSV
+            if (!searchResultsCache.isEmpty()) {
+                List<Map<String, Object>> cachedResults = applyCachedResultsToAllItems(csvData);
+                if (!cachedResults.isEmpty()) {
+                    cacheHits = cachedResults.size();
+                    logger.info("✨ Applied {} cached results to matching items", cacheHits);
+                    if (googleSheetsService != null) {
+                        try {
+                            googleSheetsService.saveEbayPriceData(cachedResults);
+                            logger.info("✅ Saved {} cached results to Google Sheets", cachedResults.size());
+                        } catch (Exception e) {
+                            logger.error("❌ Failed to save cached results to Google Sheets", e);
                         }
-                        
-                        // Recalculate median with filtered prices
-                        double finalMedian = filteredPrices.isEmpty() ? initialMedian : calculateMedian(filteredPrices);
-                        
-                        // Keep all listing details for viewing, but store first 5 prices separately for top graph
-                        List<Double> top5Prices = filteredPrices.size() > 5 
-                            ? filteredPrices.subList(0, 5) 
-                            : filteredPrices;
-                        
-                        // Keep all filtered data
-                        itemResult.put("medianPrice", finalMedian);
-                        itemResult.put("resultCount", filteredPrices.size());
-                        itemResult.put("listingDetails", filteredListingDetails); // All listings
-                        itemResult.put("allPrices", filteredPrices); // All prices for main graph
-                        itemResult.put("top5Prices", top5Prices); // First 5 prices for card graph
-                        itemResult.put("originalCount", prices.size());
-                        itemResult.put("filteredCount", prices.size() - filteredPrices.size());
-                    } else {
-                        itemResult.put("listingDetails", new ArrayList<>());
-                        itemResult.put("allPrices", new ArrayList<>());
-                        itemResult.put("error", "No sold listings found");
                     }
-                    
-                    searchResults.add(itemResult);
-                    searchCount++; // Increment counter after successful search
-                    
-                    // Small delay between searches
-                    Thread.sleep(600);  // Reduced by 40% from 1000ms
-                    
-                } catch (Exception e) {
-                    logger.error("Error searching for item: " + itemName, e);
-                    itemResult.put("error", e.getMessage());
-                    searchResults.add(itemResult);
-                    searchCount++; // Increment counter even for errors to avoid infinite loop
+                    allSearchResults.addAll(cachedResults);
                 }
             }
             
-            // Save results to Google Sheets
-            if (googleSheetsService != null && !searchResults.isEmpty()) {
-                String sheetName = googleSheetsService.saveEbayPriceData(searchResults);
-                result.put("savedToGoogleSheets", true);
-                result.put("sheetName", sheetName);
+            // Process items in batches - filter fresh each time to get updated search dates
+            boolean hasMoreItems = true;
+            int batchNumber = 1;
+            
+            while (hasMoreItems) {
+                // Refresh CSV data from Google Sheets to get the most up-to-date eBay information
+                if (googleSheetsService != null) {
+                    try {
+                        csvData = googleSheetsService.getMarketplaceDataAsCsv();
+                        logger.info("🔄 Refreshed CSV data: {} items loaded from Google Sheets", csvData.size());
+                    } catch (Exception e) {
+                        logger.warn("⚠️ Failed to refresh data from Google Sheets, using existing data: {}", e.getMessage());
+                    }
+                }
+                
+                // Filter items that haven't been searched yet (check for eBay median price instead of just search date)
+                List<Map<String, String>> itemsToSearch = csvData.stream()
+                    .filter(item -> {
+                        String ebayMedian = item.get("eBay Median Price");
+                        return ebayMedian == null || ebayMedian.trim().isEmpty();
+                    })
+                    .limit(BATCH_SIZE)
+                    .collect(Collectors.toList());
+                
+                if (itemsToSearch.isEmpty()) {
+                    logger.info("✅ No more items to search - all items processed");
+                    hasMoreItems = false;
+                    break;
+                }
+                
+                logger.info("🔄 Processing batch {}: {} items need searching", batchNumber, itemsToSearch.size());
+                
+                List<Map<String, Object>> batchResults = processBatchWithCache(driver, wait, itemsToSearch, csvData);
+                allSearchResults.addAll(batchResults);
+                totalProcessed += batchResults.size();
+                
+                // Save batch results to Google Sheets immediately
+                if (googleSheetsService != null && !batchResults.isEmpty()) {
+                    try {
+                        googleSheetsService.saveEbayPriceData(batchResults);
+                        logger.info("✅ Saved batch of {} results to Google Sheets using name matching", batchResults.size());
+                        
+                    } catch (Exception e) {
+                        logger.error("❌ Failed to save batch to Google Sheets", e);
+                    }
+                }
+                
+                batchNumber++;
+                
+                // Small delay between batches
+                logger.info("⏸️ Batch {} complete. Brief pause before next batch...", batchNumber - 1);
+                Thread.sleep(2000);
             }
             
-            result.put("searchResults", searchResults);
-            result.put("totalSearched", searchResults.size());
+            result.put("searchResults", allSearchResults);
+            result.put("totalSearched", totalProcessed);
+            result.put("batchesProcessed", batchNumber - 1);
+            result.put("cacheHits", cacheHits);
+            result.put("cacheSize", searchResultsCache.size());
             
         } catch (Exception e) {
             logger.error("Error in eBay price search", e);
             result.put("error", e.getMessage());
         } finally {
             // WebDriver is managed by Spring context, no manual cleanup needed
-            logger.info("eBay price search completed");
+            logger.info("🏁 eBay price search completed. Processed {} items in batches (Cache hits: {}, Cache size: {})", 
+                totalProcessed, cacheHits, searchResultsCache.size());
         }
         
         return result;
     }
     
-    private Map<String, Object> extractEbayData(WebDriver driver, WebDriverWait wait, String searchTerm) {
+    /**
+     * Apply cached results to ALL items in the CSV that match
+     */
+    private List<Map<String, Object>> applyCachedResultsToAllItems(List<Map<String, String>> csvData) {
+        List<Map<String, Object>> results = new ArrayList<>();
+        
+        for (Map<String, String> item : csvData) {
+            // Skip if already has eBay data
+            String ebayMedian = item.get("eBay Median Price");
+            if (ebayMedian != null && !ebayMedian.trim().isEmpty()) {
+                continue;
+            }
+            
+            String itemName = item.get("Item Name");
+            if (itemName == null || itemName.trim().isEmpty()) continue;
+            
+            // Skip if not English or Japanese
+            if (!isEnglishOrJapanese(itemName, item.get("Notes"))) {
+                continue;
+            }
+            
+            // Generate the cache key for this item
+            String searchName = cleanSearchName(itemName);
+            String productType = item.get("Product Type");
+            String language = detectLanguage(itemName, item.get("Notes"), item.get("Language"));
+            
+            SearchQuery query = new SearchQuery(itemName, searchName, productType, language);
+            String cacheKey = query.getEffectiveSearchString();
+            
+            // Check if we have cached results for this search
+            if (searchResultsCache.containsKey(cacheKey)) {
+                Map<String, Object> cachedResult = searchResultsCache.get(cacheKey);
+                
+                // Create result for this item using cached data
+                Map<String, Object> itemResult = new HashMap<>();
+                itemResult.put("originalName", item.get("Item Name"));
+                itemResult.put("searchName", cacheKey);
+                itemResult.put("cleanSearchName", searchName);
+                itemResult.put("language", language);
+                itemResult.put("set", item.get("Set"));
+                itemResult.put("productType", item.get("Product Type"));
+                itemResult.put("facebookPrice", item.get("Price"));
+                itemResult.put("marketplaceUrl", item.get("Marketplace URL"));
+                itemResult.putAll(cachedResult);
+                
+                results.add(itemResult);
+            }
+        }
+        
+        return results;
+    }
+    
+    /**
+     * Process a single batch of eBay searches with caching
+     */
+    private List<Map<String, Object>> processBatchWithCache(WebDriver driver, WebDriverWait wait, List<Map<String, String>> batch, List<Map<String, String>> allCsvData) {
+        List<Map<String, Object>> batchResults = new ArrayList<>();
+        
+        // Group items by their effective search string to avoid duplicate searches
+        Map<String, SearchQuery> searchGroups = new LinkedHashMap<>();
+        
+        // First pass: Create search queries and group items from the batch
+        for (Map<String, String> item : batch) {
+            String itemName = item.get("Item Name");
+            if (itemName == null || itemName.trim().isEmpty()) continue;
+            
+            // Skip if not English or Japanese
+            if (!isEnglishOrJapanese(itemName, item.get("Notes"))) {
+                logger.info("Skipping non-English/Japanese item: {}", itemName);
+                continue;
+            }
+            
+            // Clean up item name for search
+            String searchName = cleanSearchName(itemName);
+            
+            // Get product type
+            String productType = item.get("Product Type");
+            
+            // Detect language
+            String language = detectLanguage(itemName, item.get("Notes"), item.get("Language"));
+            
+            // Create search query
+            SearchQuery query = new SearchQuery(itemName, searchName, productType, language);
+            String effectiveSearch = query.getEffectiveSearchString();
+            
+            // Check if we already have this in cache
+            if (searchResultsCache.containsKey(effectiveSearch)) {
+                logger.info("🎯 Cache hit for '{}' - skipping eBay search", effectiveSearch);
+                continue; // Skip this item as we already have the results
+            }
+            
+            // Group items with identical search strings
+            if (searchGroups.containsKey(effectiveSearch)) {
+                searchGroups.get(effectiveSearch).addMatchingItem(item);
+            } else {
+                query.addMatchingItem(item);
+                searchGroups.put(effectiveSearch, query);
+            }
+        }
+        
+        // Now also add ALL matching items from the entire CSV to each search group
+        for (SearchQuery searchQuery : searchGroups.values()) {
+            String cacheKey = searchQuery.getEffectiveSearchString();
+            
+            // Find ALL items in the entire CSV that match this search
+            for (Map<String, String> csvItem : allCsvData) {
+                // Skip if already has eBay data
+                String ebayMedian = csvItem.get("eBay Median Price");
+                if (ebayMedian != null && !ebayMedian.trim().isEmpty()) {
+                    continue;
+                }
+                
+                // Skip if already in the group
+                if (searchQuery.getMatchingItems().contains(csvItem)) {
+                    continue;
+                }
+                
+                String itemName = csvItem.get("Item Name");
+                if (itemName == null || itemName.trim().isEmpty()) continue;
+                
+                // Check if this item would generate the same search
+                if (!isEnglishOrJapanese(itemName, csvItem.get("Notes"))) {
+                    continue;
+                }
+                
+                String searchName = cleanSearchName(itemName);
+                String productType = csvItem.get("Product Type");
+                String language = detectLanguage(itemName, csvItem.get("Notes"), csvItem.get("Language"));
+                
+                SearchQuery tempQuery = new SearchQuery(itemName, searchName, productType, language);
+                if (tempQuery.getEffectiveSearchString().equals(cacheKey)) {
+                    searchQuery.addMatchingItem(csvItem);
+                    logger.debug("Added additional matching item from CSV: {}", itemName);
+                }
+            }
+        }
+        
+        logger.info("📊 Grouped {} items into {} unique NEW searches (excluding cached)", batch.size(), searchGroups.size());
+        
+        // Second pass: Execute unique searches and apply results to all matching items
+        for (SearchQuery searchQuery : searchGroups.values()) {
+            List<Map<String, String>> matchingItems = searchQuery.getMatchingItems();
+            String searchNameWithLanguage = searchQuery.getEffectiveSearchString();
+            
+            try {
+                // Search eBay sold listings
+                String encodedSearch = URLEncoder.encode(searchNameWithLanguage, StandardCharsets.UTF_8.toString());
+                String ebayUrl = String.format("https://www.ebay.com.au/sch/i.html?_nkw=%s&_sacat=&LH_Complete=1&LH_Sold=1", encodedSearch);
+                
+                driver.get(ebayUrl);
+                
+                // Wait for results to load (reduced for speed)
+                Thread.sleep(2500);
+                
+                // Use the first item's Facebook price for filtering (they should all be similar if grouped correctly)
+                String facebookPriceStr = matchingItems.get(0).get("Price");
+                double facebookPrice = parseFacebookPrice(facebookPriceStr);
+                
+                // Extract prices and listing details from eBay
+                Map<String, Object> ebayData = extractEbayData(driver, wait, searchNameWithLanguage, facebookPrice);
+                List<Double> prices = (List<Double>) ebayData.get("prices");
+                List<String> listingDetails = (List<String>) ebayData.get("listingDetails");
+                
+                // Process eBay results
+                Map<String, Object> searchResults = new HashMap<>();
+                
+                if (!prices.isEmpty()) {
+                    // Calculate initial median
+                    double initialMedian = calculateMedian(prices);
+                    
+                    // Filter out prices that are more than 50% above the median
+                    double upperLimit = initialMedian * 1.5;
+                    List<Double> filteredPrices = new ArrayList<>();
+                    List<String> filteredListingDetails = new ArrayList<>();
+                    
+                    for (int i = 0; i < prices.size(); i++) {
+                        if (prices.get(i) <= upperLimit) {
+                            filteredPrices.add(prices.get(i));
+                            filteredListingDetails.add(listingDetails.get(i));
+                        } else {
+//                            logger.debug("Filtering out price ${} which is >50% above median ${}",
+//                                prices.get(i), initialMedian);
+                        }
+                    }
+                    
+                    // Recalculate median with filtered prices
+                    double finalMedian = filteredPrices.isEmpty() ? initialMedian : calculateMedian(filteredPrices);
+                    
+                    // Keep all listing details for viewing, but store first 5 prices separately for top graph
+                    List<Double> top5Prices = filteredPrices.size() > 5 
+                        ? filteredPrices.subList(0, 5) 
+                        : filteredPrices;
+                    
+                    searchResults.put("medianPrice", finalMedian);
+                    searchResults.put("resultCount", filteredPrices.size());
+                    searchResults.put("listingDetails", filteredListingDetails);
+                    searchResults.put("allPrices", filteredPrices);
+                    searchResults.put("top5Prices", top5Prices);
+                    searchResults.put("originalCount", prices.size());
+                    searchResults.put("filteredCount", prices.size() - filteredPrices.size());
+                    
+                    // Store in cache for future use
+                    searchResultsCache.put(searchNameWithLanguage, new HashMap<>(searchResults));
+                } else {
+                    searchResults.put("listingDetails", new ArrayList<>());
+                    searchResults.put("allPrices", new ArrayList<>());
+                    searchResults.put("error", "No sold listings found");
+                }
+                
+                // Apply results to ALL matching items
+                for (Map<String, String> item : matchingItems) {
+                    Map<String, Object> itemResult = new HashMap<>();
+                    
+                    // Item-specific data
+                    itemResult.put("originalName", item.get("Item Name"));
+                    itemResult.put("searchName", searchNameWithLanguage);
+                    itemResult.put("cleanSearchName", searchQuery.getCleanedItemName());
+                    itemResult.put("language", searchQuery.getLanguage());
+                    itemResult.put("set", item.get("Set"));
+                    itemResult.put("productType", item.get("Product Type"));
+                    itemResult.put("facebookPrice", item.get("Price"));
+                    itemResult.put("marketplaceUrl", item.get("Marketplace URL"));
+                    
+                    // Copy all eBay search results
+                    itemResult.putAll(searchResults);
+                    
+                    batchResults.add(itemResult);
+                }
+                
+                logger.info("✅ Applied eBay results to {} items with search '{}' (cached for future use)", matchingItems.size(), searchNameWithLanguage);
+                
+                // Small delay between searches (reduced for speed)
+                Thread.sleep(2000);
+                
+            } catch (Exception e) {
+                logger.error("Error searching for: {}", searchNameWithLanguage, e);
+                
+                // Apply error to all matching items
+                for (Map<String, String> item : matchingItems) {
+                    Map<String, Object> itemResult = new HashMap<>();
+                    itemResult.put("originalName", item.get("Item Name"));
+                    itemResult.put("searchName", searchNameWithLanguage);
+                    itemResult.put("error", e.getMessage());
+                    batchResults.add(itemResult);
+                }
+            }
+        }
+        
+        return batchResults;
+    }
+    
+    private Map<String, Object> extractEbayData(WebDriver driver, WebDriverWait wait, String searchTerm, double facebookPrice) {
         List<Double> prices = new ArrayList<>();
         List<String> listingDetails = new ArrayList<>();
         
@@ -182,7 +458,7 @@ public class EbayPriceService {
                 List<WebElement> newStructureElements = driver.findElements(By.cssSelector("li[data-listingid]"));
                 if (!newStructureElements.isEmpty()) {
                     listingElements = newStructureElements;
-                    logger.info("Using new eBay HTML structure");
+//                    logger.info("Using new eBay HTML structure");
                 }
             } catch (Exception e) {
                 logger.debug("New structure not found, trying old structure");
@@ -201,9 +477,9 @@ public class EbayPriceService {
                 }
             }
             
-            // Limit to 30 results per item
+            // Limit to 15 results per item (sufficient for median calculation)
             int resultCount = 0;
-            final int MAX_RESULTS = 30;
+            final int MAX_RESULTS = 15;
             
             for (WebElement listingElement : listingElements) {
                 if (resultCount >= MAX_RESULTS) {
@@ -276,25 +552,32 @@ public class EbayPriceService {
                     boolean titleIncludesPSA = title.toLowerCase().contains("psa");
                     
                     if (!searchIncludesPSA && titleIncludesPSA) {
-                        logger.debug("Skipping PSA listing since search doesn't include PSA: {}", title);
+//                        logger.debug("Skipping PSA listing since search doesn't include PSA: {}", title);
                         continue;
                     }
                     
                     // Skip multiple quantity listings (sets, bundles, lots, etc)
                     if (isMultipleQuantityListing(title)) {
-                        logger.debug("Skipping multiple quantity listing: {}", title);
+//                        logger.debug("Skipping multiple quantity listing: {}", title);
                         continue;
                     }
                     
                     // Skip Pokemon Center/Centre exclusive items (premium versions)
                     if (isPokemonCenterListing(title)) {
-                        logger.debug("Skipping Pokemon Center exclusive listing: {}", title);
+//                        logger.debug("Skipping Pokemon Center exclusive listing: {}", title);
                         continue;
                     }
                     
                     // Skip listings with multiple different products
                     if (hasMultipleProducts(title)) {
-                        logger.debug("Skipping multiple products listing: {}", title);
+//                        logger.debug("Skipping multiple products listing: {}", title);
+                        continue;
+                    }
+                    
+                    // Skip listings with more than 70% price discrepancy from Facebook price
+                    if (facebookPrice > 0 && isPriceDiscrepancyTooHigh(price, facebookPrice)) {
+//                        logger.debug("Skipping listing with high price discrepancy: eBay ${}, Facebook ${} ({}% diff): {}",
+//                                   price, facebookPrice, calculatePriceDiscrepancyPercent(price, facebookPrice), title);
                         continue;
                     }
                     
@@ -374,8 +657,6 @@ public class EbayPriceService {
                 return null;
             }
             
-            logger.debug("Parsing price text: '{}'", priceText);
-            
             // Remove currency symbols, "AU", "$", and other non-numeric characters, but keep numbers, dots, and commas
             String cleanedPrice = priceText.replaceAll("(?i)(AU\\s*\\$?|\\$|USD|AUD|CAD|GBP|EUR)", "");
             cleanedPrice = cleanedPrice.replaceAll("[^0-9.,]", "");
@@ -401,7 +682,7 @@ public class EbayPriceService {
                 return null;
             }
             
-            logger.debug("Successfully parsed price: {} from '{}'", price, priceText);
+//            logger.debug("Successfully parsed price: {} from '{}'", price, priceText);
             return price;
         } catch (Exception e) {
             logger.debug("Failed to parse price '{}': {}", priceText, e.getMessage());
@@ -425,15 +706,28 @@ public class EbayPriceService {
         return itemName;
     }
     
-    private String detectLanguage(String itemName, String notes) {
+    private String detectLanguage(String itemName, String notes, String languageColumn) {
+        // First priority: Check notes and item name for explicit language indicators
         String combined = (itemName + " " + (notes != null ? notes : "")).toLowerCase();
         
-        // Check for explicit language indicators
+        // Check for explicit language indicators in notes/item name
         if (combined.contains("japanese") || 
             combined.contains("japan") || 
             combined.contains("jp") ||
             combined.contains("jpn")) {
             return "Japanese";
+        }
+        
+        // Second priority: Use Language column if available and valid
+        if (languageColumn != null && !languageColumn.trim().isEmpty()) {
+            String langLower = languageColumn.trim().toLowerCase();
+            if (langLower.contains("japanese") || langLower.contains("japan") || 
+                langLower.equals("jp") || langLower.equals("jpn")) {
+                return "Japanese";
+            } else if (langLower.contains("english") || langLower.equals("en") || 
+                       langLower.equals("eng")) {
+                return "English";
+            }
         }
         
         // Default to English
@@ -621,5 +915,62 @@ public class EbayPriceService {
             }
         }
         return false;
+    }
+    
+    /**
+     * Parse Facebook price string to double
+     */
+    private double parseFacebookPrice(String priceStr) {
+        if (priceStr == null || priceStr.trim().isEmpty()) {
+            return 0.0;
+        }
+        
+        try {
+            // Remove currency symbols, spaces, and other non-numeric characters except dots and commas
+            String cleanedPrice = priceStr.replaceAll("[^\\d.,]", "");
+            
+            // Handle comma as thousands separator (e.g., "1,500.00")
+            if (cleanedPrice.contains(",") && cleanedPrice.contains(".")) {
+                cleanedPrice = cleanedPrice.replace(",", "");
+            }
+            // Handle comma as decimal separator (e.g., "15,50")
+            else if (cleanedPrice.contains(",") && !cleanedPrice.contains(".")) {
+                cleanedPrice = cleanedPrice.replace(",", ".");
+            }
+            
+            return Double.parseDouble(cleanedPrice);
+        } catch (NumberFormatException e) {
+            logger.debug("Failed to parse Facebook price '{}': {}", priceStr, e.getMessage());
+            return 0.0;
+        }
+    }
+    
+    /**
+     * Check if price discrepancy is too high (>70%)
+     * Uses the lower price as the base for percentage calculation to be more lenient
+     */
+    private boolean isPriceDiscrepancyTooHigh(double ebayPrice, double facebookPrice) {
+        if (ebayPrice <= 0 || facebookPrice <= 0) {
+            return false; // Don't filter if either price is invalid
+        }
+        
+        double discrepancyPercent = calculatePriceDiscrepancyPercent(ebayPrice, facebookPrice);
+        return discrepancyPercent > 70.0;
+    }
+    
+    /**
+     * Calculate price discrepancy percentage
+     * Uses the lower price as the base to be more lenient with matches
+     */
+    private double calculatePriceDiscrepancyPercent(double ebayPrice, double facebookPrice) {
+        if (ebayPrice <= 0 || facebookPrice <= 0) {
+            return 0.0;
+        }
+        
+        // Use the lower price as the base for percentage calculation
+        double basePrice = Math.min(ebayPrice, facebookPrice);
+        double higherPrice = Math.max(ebayPrice, facebookPrice);
+        
+        return ((higherPrice - basePrice) / basePrice) * 100.0;
     }
 }

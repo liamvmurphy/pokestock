@@ -136,6 +136,15 @@ public class EbayPriceController {
             csvItem.put("Quantity", getString(marketplaceItem, "quantity"));
             csvItem.put("Notes", getString(marketplaceItem, "notes"));
             csvItem.put("Language", getString(marketplaceItem, "language"));
+            csvItem.put("Marketplace URL", getString(marketplaceItem, "marketplaceUrl"));
+            
+            // Include eBay data if available (for proper filtering)
+            csvItem.put("eBay Search Date", getString(marketplaceItem, "ebaySearchDate"));
+            csvItem.put("eBay Median Price", getString(marketplaceItem, "ebayMedianPrice"));
+            csvItem.put("eBay Result Count", getString(marketplaceItem, "ebayResultCount"));
+            csvItem.put("eBay Listing Details", getString(marketplaceItem, "ebayListingDetails"));
+            csvItem.put("eBay All Prices", getString(marketplaceItem, "ebayAllPrices"));
+            csvItem.put("eBay Top 5 Prices", getString(marketplaceItem, "ebayTop5Prices"));
             
             csvData.add(csvItem);
         }
